@@ -1,0 +1,61 @@
+site_name: worktree-integrator
+site_description: 複数の Git リポジトリの worktree をまとめて作成・管理する CLI ツール
+site_url: https://vimrak-hal.github.io/worktree-integrator/
+repo_url: https://github.com/vimrak-hal/worktree-integrator
+repo_name: vimrak-hal/worktree-integrator
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  language: ja
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: ダークモードに切り替え
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: ライトモードに切り替え
+  features:
+    - navigation.tabs
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Usage: usage.md
+  - Configuration: configuration.md
+  - Hooks: hooks.md
+  - Copy Files: copy-files.md
+  - Server Management: server-management.md
+  - Alias: alias.md
+  - MCP Server: mcp-server.md
+  - Behavior: behavior.md
+  - Architecture: architecture.md
+  - Testing: testing.md

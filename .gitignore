@@ -1,0 +1,10 @@
+# Built binaries
+/worktree-integrator
+/wti
+
+# Go test / coverage artifacts
+*.test
+*.out
+
+# Rust build artifacts (legacy, pre-Go rewrite)
+/target/
