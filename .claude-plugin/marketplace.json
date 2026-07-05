@@ -1,0 +1,14 @@
+{
+  "name": "worktree-integrator",
+  "description": "複数の Git リポジトリの worktree を一括作成・管理する CLI「worktree-integrator」向けの Claude Code プラグイン集",
+  "owner": {
+    "name": "vimrak-hal"
+  },
+  "plugins": [
+    {
+      "name": "worktree-integrator",
+      "description": "worktree-integrator の初期セットアップ（設定ファイル・dev サーバー定義・MCP 登録・検証）を案内するスキルと、環境不調を一次調査する読み取り専用の診断エージェント",
+      "source": "./plugins/worktree-integrator"
+    }
+  ]
+}

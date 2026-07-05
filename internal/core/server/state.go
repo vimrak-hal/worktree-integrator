@@ -1,0 +1,329 @@
+package server
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/BurntSushi/toml"
+
+	"github.com/vimrak-hal/worktree-integrator/internal/infra/proc"
+	"github.com/vimrak-hal/worktree-integrator/internal/infra/statedir"
+	"github.com/vimrak-hal/worktree-integrator/internal/infra/store"
+)
+
+// StateVersion は servers.toml のオンディスクフォーマットバージョン。v2 で
+// RepoState.Active と Runtime.Initialized を廃止し、worktree を Instance の属性に
+// 一本化した。旧形式（v1 以前）はマイグレーションせず .bak へ退避する（migrateLegacy）。
+const StateVersion uint32 = 2
+
+// nowUnix は現在時刻を Unix エポックからの秒数として返す。これはサーバーの起動時刻や
+// setup 完了時刻が永続化される形式である。
+func nowUnix() int64 {
+	return time.Now().Unix()
+}
+
+// State は、永続化されるサーバー状態の全体。
+//
+// 不変条件（v2）: 「どの worktree がアクティブか」という独立した状態は存在しない。
+// それは Runtime.Running.Worktree（稼働インスタンスの属性）からの導出値である。
+// 状態の重複が無いため、部分失敗しても「虚偽のアクティブ表示」は構造的に起こらない。
+type State struct {
+	Version uint32                `toml:"version"`
+	Repos   map[string]*RepoState `toml:"repos"`
+}
+
+// DocVersion は store.Versioned を実装する。Load 時に、このビルドが理解できるより
+// 新しいフォーマットのファイルを拒否するために使われる。
+func (s *State) DocVersion() uint32 { return s.Version }
+
+// Repo は repo の状態を返し、存在しなければ空のエントリを作成する。
+func (s *State) Repo(name string) *RepoState {
+	if s.Repos == nil {
+		s.Repos = map[string]*RepoState{}
+	}
+	rs := s.Repos[name]
+	if rs == nil {
+		rs = &RepoState{Servers: map[string]*Runtime{}}
+		s.Repos[name] = rs
+	}
+	return rs
+}
+
+// RepoState は、1 つのリポジトリのサーバー状態。サーバー名をキーとしたサーバー
+// ごとのランタイム状態のみを持つ（旧 v1 の Active は廃止された。どの worktree で
+// 動いているかは各サーバーの Instance.Worktree が持つ）。
+type RepoState struct {
+	Servers map[string]*Runtime `toml:"servers"`
+}
+
+// Server は名前付きサーバーの runtime を返し、存在しなければ空のエントリを作成する。
+func (r *RepoState) Server(name string) *Runtime {
+	if r.Servers == nil {
+		r.Servers = map[string]*Runtime{}
+	}
+	rt := r.Servers[name]
+	if rt == nil {
+		rt = &Runtime{}
+		r.Servers[name] = rt
+	}
+	return rt
+}
+
+// Runtime は、リポジトリ内における 1 つのサーバーのランタイム状態。TOML の
+// シリアライズではフィールドの順序が重要で、スカラー（last_log）→ setup サブテーブル →
+// running サブテーブルの順に書き出される。
+//
+// 不変条件:
+//   - Running が非 nil のとき、そのインスタンスは「最後に起動を確認したプロセス」で
+//     ある。生存はプロセス実体（Ident の開始時刻照合）と突き合わせて検証され、
+//     消滅していれば Probe が自己修復する。停止に失敗した場合は Running を保持する
+//     （孤児を台帳から消さない。次回コマンドで再試行できる）。
+//   - Setup の記録は「その worktree でこのサーバーの setup が完了した」ことを表すが、
+//     判定時には record.Path の実在とも突き合わせる（worktree が消えていれば初回扱い）。
+type Runtime struct {
+	// LastLog は最後に起動したインスタンスのログパス。Running が消えた後（クラッシュ・
+	// 停止後）でも `server logs` が直近のログへフォールバックできるようにする。
+	LastLog string `toml:"last_log,omitempty"`
+	// Setup は、worktree 名 → setup 完了の記録。
+	Setup map[string]SetupRecord `toml:"setup,omitempty"`
+	// Running は、稼働中の（または最後に稼働が確認された）プロセス（あれば）。
+	Running *Instance `toml:"running,omitempty"`
+}
+
+// RecordSetup は worktree の setup 完了を記録する。path は setup を実行した
+// worktree 内のリポジトリルートで、isFirst 判定時に実在確認される。
+func (r *Runtime) RecordSetup(worktree, path string) {
+	if r.Setup == nil {
+		r.Setup = map[string]SetupRecord{}
+	}
+	r.Setup[worktree] = SetupRecord{Path: path, DoneAt: nowUnix()}
+}
+
+// SetupRecord は、1 つの worktree に対する setup 完了の記録。
+type SetupRecord struct {
+	// Path は setup を実行した worktree 内のリポジトリルート。実在しなくなっていれば
+	// （worktree が削除・再作成されていれば）記録は無効として扱われる。
+	Path   string `toml:"path"`
+	DoneAt int64  `toml:"done_at"`
+}
+
+// Instance は、稼働中のサーバープロセス。
+type Instance struct {
+	// Ident はプロセスの同一性トークン。シグナル送出前に必ず開始時刻を照合し、
+	// pgid 再利用による無関係プロセスの誤殺を防ぐ。
+	Ident proc.Ident `toml:"ident"`
+	// Worktree はこのインスタンスが動いている worktree 名。リポジトリ単位の
+	// 「アクティブ worktree」はこのフィールドからの導出値である。
+	Worktree string `toml:"worktree"`
+	// Log はこのインスタンスの出力を取り込んでいるログファイル。読み出しはこの
+	// 記録値を正とし、決定的パスの再計算はフォールバックである。
+	Log string `toml:"log"`
+	// GraceSecs は起動時点の Spec.Grace() を凍結した値。停止時には（設定がその後
+	// 変わっていても）この値を使う。
+	GraceSecs uint64 `toml:"grace_secs"`
+	StartedAt int64  `toml:"started_at"`
+}
+
+// Grace は、このインスタンスの停止時に SIGTERM → SIGKILL のエスカレートまで待つ
+// 猶予（起動時に凍結された値）。
+func (i *Instance) Grace() time.Duration {
+	return time.Duration(i.GraceSecs) * time.Second
+}
+
+// StateStore は、statedir.Root の下でアドバイザリロックのもと State を読み書きする。
+// 共有の store プリミティブの上に、ログパスの導出と旧形式ファイルの退避を重ねる。
+// ログディレクトリの作成はここでは行わない（プロセス起動経路 SpawnDetached が担う）。
+type StateStore struct {
+	inner *store.File[State]
+	root  statedir.Root
+	// OnLegacy は旧形式（v1 以前）の状態ファイルを .bak へ退避した直後に、その退避先
+	// パスとともに呼ばれる。表示層が警告（「稼働中のサーバーは手動で停止してください」）
+	// を出すための通知であり、nil なら何もしない。
+	OnLegacy func(bakPath string)
+}
+
+// NewStateStore は root を状態ルートとする状態ストアを返す。呼び出し側（app 層）が
+// statedir.Root を解決して注入することで、alias ストアとのディレクトリ共有が
+// 明示的な契約になる。
+func NewStateStore(root statedir.Root) *StateStore {
+	inner := store.New(root.ServersFile(), "state", StateVersion, func() *State {
+		return &State{Version: StateVersion, Repos: map[string]*RepoState{}}
+	})
+	return &StateStore{inner: inner, root: root}
+}
+
+// StateFile は、状態ファイルのパス（テストで使用）。
+func (s *StateStore) StateFile() string { return s.inner.Path() }
+
+// LogsDir は、サーバーごとのログファイルを保持するディレクトリ。
+func (s *StateStore) LogsDir() string { return s.root.LogsDir() }
+
+// encodeLogComponent は名前をログファイル名の 1 コンポーネントへ単射に写す。
+// 置換は '%'→"%25"、'/'→"%2F"、'_'→"%5F" の 3 つのみ。'%' を先にエスケープする
+// ため復号は一意であり、エンコード結果は '_' を含まないので、コンポーネントを
+// "__" で連結してもどこが区切りかが一意に定まる（旧実装の '/'→'-' 平坦化は
+// "a/b" と "a-b" が衝突し、名前中の '_' は "__" 区切りと衝突する非単射変換だった）。
+func encodeLogComponent(name string) string {
+	name = strings.ReplaceAll(name, "%", "%25")
+	name = strings.ReplaceAll(name, "/", "%2F")
+	name = strings.ReplaceAll(name, "_", "%5F")
+	return name
+}
+
+// LogPath は、あるワークツリーにおけるリポジトリのサーバーに対する決定論的な
+// ログファイルパス。repo・server・worktree の各名前を単射エンコードしてから "__" で
+// 連結するため、(repo, server, worktree) の組とログファイル名は 1 対 1 に対応する。
+// repo と server 名は検証済みで '/' を含まないが、防御的に同じ関数を通す。
+func (s *StateStore) LogPath(repo, server, worktree string) string {
+	return filepath.Join(s.LogsDir(), fmt.Sprintf("%s__%s__%s.log",
+		encodeLogComponent(repo), encodeLogComponent(server), encodeLogComponent(worktree)))
+}
+
+// PrevLogPath は path の 1 世代前のログ（SpawnDetached がローテートした .prev）の
+// パスを返す。
+func PrevLogPath(path string) string { return path + ".prev" }
+
+// ParseLogName はログファイルのベース名を (repo, server, worktree) の組へ復号する。
+// LogPath の単射エンコードの逆写像であり、worktree ライフサイクル（remove のログ
+// 削除・doctor の孤児ログ検出）が「このログはどの worktree のものか」をファイル名
+// だけから決定できるようにする。prev は 1 世代前のログ（.log.prev）かどうか。
+// このツールの命名規則に従わないファイル名は ok=false（他人のファイルには触れない）。
+func ParseLogName(base string) (repo, server, worktree string, prev bool, ok bool) {
+	if rest, found := strings.CutSuffix(base, ".prev"); found {
+		base = rest
+		prev = true
+	}
+	base, found := strings.CutSuffix(base, ".log")
+	if !found {
+		return "", "", "", false, false
+	}
+	// エンコード済みコンポーネントは '_' を含まない（'_'→"%5F"）ため、"__" 区切りは
+	// 一意に定まる。
+	parts := strings.Split(base, "__")
+	if len(parts) != 3 {
+		return "", "", "", false, false
+	}
+	decoded := make([]string, 3)
+	for i, part := range parts {
+		d, dok := decodeLogComponent(part)
+		if !dok {
+			return "", "", "", false, false
+		}
+		decoded[i] = d
+	}
+	return decoded[0], decoded[1], decoded[2], prev, true
+}
+
+// decodeLogComponent は encodeLogComponent の逆写像。有効なエスケープは
+// %25（'%'）・%2F（'/'）・%5F（'_'）の 3 つのみで、それ以外の '%' の使われ方や
+// 生の '_'（"__" 区切りにのみ現れるはず）を含む入力は ok=false。
+func decodeLogComponent(s string) (string, bool) {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '%':
+			if i+3 > len(s) {
+				return "", false
+			}
+			switch s[i+1 : i+3] {
+			case "25":
+				b.WriteByte('%')
+			case "2F":
+				b.WriteByte('/')
+			case "5F":
+				b.WriteByte('_')
+			default:
+				return "", false
+			}
+			i += 2
+		case '_':
+			return "", false
+		default:
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String(), true
+}
+
+// legacyProbe は旧形式検出のためにバージョンだけを読むための最小のデコード先。
+// 未知キーは無視する（旧形式は active / initialized キーを含むため、State への
+// 厳密デコードでは読めない）。
+type legacyProbe struct {
+	Version uint32 `toml:"version"`
+}
+
+// migrateLegacy は状態ファイルが旧形式（version が StateVersion 未満）であれば
+// <path>.bak へ退避する。マイグレーション機構は作らない（設計判断）: 退避後は
+// 新規の空状態から始まり、旧ファイルに記録されていた稼働中サーバーは手動での停止が
+// 必要になる（OnLegacy 経由で表示層が警告する）。
+//
+// 検査・退避は排他ロックの下で行い、並行するコマンドと競合しない。すべての
+// 公開エントリポイント（Exclusive / Update / View）が最初にこれを通るため、
+// 旧形式ファイルが State のデコードに達する経路は存在しない。
+func (s *StateStore) migrateLegacy(ctx context.Context) error {
+	session, err := s.inner.Exclusive(ctx)
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+
+	data, err := os.ReadFile(s.inner.Path())
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read state file %s: %w", s.inner.Path(), err)
+	}
+	var probe legacyProbe
+	// デコード不能なファイルはここでは触らず、後続の Load に本来のエラーを報告させる。
+	if _, err := toml.Decode(string(data), &probe); err != nil {
+		return nil
+	}
+	if probe.Version >= StateVersion {
+		return nil
+	}
+	bak := s.inner.Path() + ".bak"
+	if err := os.Rename(s.inner.Path(), bak); err != nil {
+		return fmt.Errorf("move legacy state file aside: %w", err)
+	}
+	if s.OnLegacy != nil {
+		s.OnLegacy(bak)
+	}
+	return nil
+}
+
+// Exclusive は排他ロックを取得し、読み書き可能なセッションを返す。ロックは短命に
+// 保つこと: ワークフロー全体の直列化は statedir.Root.WithRepoLock（repo 操作ロック）が
+// 担い、状態ファイルロックは Load / Save の間だけ保持する。
+func (s *StateStore) Exclusive(ctx context.Context) (*store.Session[State], error) {
+	if err := s.migrateLegacy(ctx); err != nil {
+		return nil, err
+	}
+	return s.inner.Exclusive(ctx)
+}
+
+// Update は、排他ロックの下で読み込んだ状態に対して mutate を実行し、状態が dirty と
+// 報告された場合にのみ永続化する。
+func (s *StateStore) Update(ctx context.Context, mutate func(state *State) (dirty bool, err error)) error {
+	if err := s.migrateLegacy(ctx); err != nil {
+		return err
+	}
+	return s.inner.Update(ctx, mutate)
+}
+
+// View は、共有ロックの下で読み込んだ状態に対して view を実行する読み取り専用の
+// 操作で、決して永続化しない。状態を変更する場合は Update を使うこと。view に渡る
+// ドキュメントは呼び出しごとに新しく読まれた専有のコピーであり、view の外へ持ち出して
+// も安全である（ただしそれを書き戻す場合は Update を使う）。
+func (s *StateStore) View(ctx context.Context, view func(state *State) error) error {
+	if err := s.migrateLegacy(ctx); err != nil {
+		return err
+	}
+	return s.inner.View(ctx, view)
+}

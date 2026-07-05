@@ -1,0 +1,31 @@
+/* 見出しの階層をひと目で区別できるようにする。
+   既定テーマは h1/h2 が同じ細字、h4 はサイズが上がらず
+   太字なだけになり、レベルの違いが分かりにくいための調整。 */
+
+.md-typeset h1 {
+  font-weight: 700;
+  color: var(--md-default-fg-color);
+}
+
+.md-typeset h2 {
+  margin-top: 2em;
+  padding-bottom: 0.3em;
+  font-weight: 700;
+  color: var(--md-primary-fg-color);
+  border-bottom: 2px solid var(--md-primary-fg-color--light);
+}
+
+.md-typeset h3 {
+  margin-top: 1.8em;
+  padding-left: 0.6em;
+  font-weight: 600;
+  border-left: 4px solid var(--md-accent-fg-color);
+}
+
+.md-typeset h4 {
+  font-size: 0.95em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--md-default-fg-color--light);
+}

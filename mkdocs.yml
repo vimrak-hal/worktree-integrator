@@ -1,0 +1,77 @@
+site_name: worktree-integrator
+site_description: 複数の Git リポジトリの worktree をまとめて作成・管理する CLI ツール
+site_url: https://vimrak-hal.github.io/worktree-integrator/
+repo_url: https://github.com/vimrak-hal/worktree-integrator
+repo_name: vimrak-hal/worktree-integrator
+edit_uri: edit/main/docs/
+
+extra_css:
+  - stylesheets/extra.css
+
+theme:
+  name: material
+  language: ja
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: ダークモードに切り替え
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: ライトモードに切り替え
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+    - content.tooltips
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - はじめに:
+      - Claude Code Plugin: claude-code-plugin.md
+      - Installation: installation.md
+      - Usage: usage.md
+  - 機能:
+      - Server Management: server-management.md
+      - MCP Server: mcp-server.md
+  - 設定:
+      - Configuration: configuration.md
+      - Hooks: hooks.md
+      - Copy Files: copy-files.md
+  - プロジェクト:
+      - Architecture: architecture.md
+      - Testing: testing.md
