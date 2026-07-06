@@ -373,6 +373,35 @@ func TestLogsReadsNamedWorktreeLog(t *testing.T) {
 	}
 }
 
+// Lines が 0 以下ならパスの解決だけを返し、本文は読まない（TUI が増分読みのために
+// パスだけを定期取得する経路）。Missing の判定は通常どおり行われる。
+func TestLogsZeroLinesResolvesPathsOnly(t *testing.T) {
+	e := newEnv(t, "feat-a")
+	store := e.store()
+	proc := serverfake.New()
+	e.switchTo(t, proc, "feat-a")
+	writeLog(t, store.LogPath("app", "backend", "feat-a"), "should not be read\n")
+
+	res, err := Logs(t.Context(), e.deps(proc), e.cmd(),
+		action.LogsKind{Scope: action.OneWorktree{Name: name(t, "feat-a")}, Lines: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range res.Logs {
+		if entry.Path == "" {
+			t.Fatalf("entry must resolve a path: %+v", entry)
+		}
+		if len(entry.Lines) != 0 || entry.Error != "" {
+			t.Fatalf("no content must be read with Lines<=0: %+v", entry)
+		}
+		// Missing 判定は Lines=0 でも生きている: 注入した backend のログだけが
+		// 実在し、frontend のログは存在しない。
+		if wantMissing := entry.Server != "backend"; entry.Missing != wantMissing {
+			t.Fatalf("missing detection must still apply: %+v", entry)
+		}
+	}
+}
+
 // logs --prev は 1 世代前（.prev）を読む。
 func TestLogsPrevReadsRotatedGeneration(t *testing.T) {
 	e := newEnv(t, "feat-a")
