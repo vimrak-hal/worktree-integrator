@@ -76,6 +76,55 @@ func TestCurrentBranch(t *testing.T) {
 	}
 }
 
+func TestPruneWorktrees(t *testing.T) {
+	tmp := t.TempDir()
+	repoPath := testutil.CloneWithBranch(t, tmp, "main")
+
+	// 連結ワークツリーを作り、ディレクトリだけ手動削除して孤立メタデータを残す。
+	orphan := filepath.Join(tmp, "oldwt", "repo")
+	if err := os.MkdirAll(filepath.Dir(orphan), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	testutil.Git(t, repoPath, "worktree", "add", "-b", "throwaway", orphan)
+	if err := os.RemoveAll(orphan); err != nil {
+		t.Fatal(err)
+	}
+
+	// prune 前は孤立した管理情報がまだ列挙される。
+	metaDir := filepath.Join(repoPath, ".git", "worktrees", "repo")
+	if _, err := os.Stat(metaDir); err != nil {
+		t.Fatalf("expected orphaned worktree metadata at %s: %v", metaDir, err)
+	}
+
+	if err := git.PruneWorktrees(t.Context(), repoPath); err != nil {
+		t.Fatalf("PruneWorktrees error = %v", err)
+	}
+
+	// prune 後は孤立した管理情報が削除されている。
+	if _, err := os.Stat(metaDir); !os.IsNotExist(err) {
+		t.Fatalf("orphaned metadata still present after prune: err=%v", err)
+	}
+}
+
+func TestPruneWorktreesKeepsLiveWorktree(t *testing.T) {
+	tmp := t.TempDir()
+	repoPath := testutil.CloneWithBranch(t, tmp, "main")
+
+	live := filepath.Join(tmp, "livewt", "repo")
+	if err := os.MkdirAll(filepath.Dir(live), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	testutil.Git(t, repoPath, "worktree", "add", "-b", "alive", live)
+
+	if err := git.PruneWorktrees(t.Context(), repoPath); err != nil {
+		t.Fatalf("PruneWorktrees error = %v", err)
+	}
+	// 生きているワークツリーには手を触れない。
+	if _, err := os.Stat(filepath.Join(live, ".git")); err != nil {
+		t.Fatal("live worktree must survive prune")
+	}
+}
+
 // PruneWorktreesDryRun は rm -rf された worktree の残骸メタデータを（削除せずに）
 // 報告し、PruneWorktrees が実際に掃除する。
 func TestPruneWorktreesDryRunReportsResidue(t *testing.T) {
