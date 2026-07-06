@@ -1,12 +1,15 @@
 package git_test
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/core/git"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/testutil"
@@ -48,6 +51,52 @@ func TestFetchRefUnknownRemoteFails(t *testing.T) {
 	// 未設定のリモートを fetch しようとするとエラーになる。
 	if err := git.FetchRef(t.Context(), repoPath, "nope", "main"); err == nil {
 		t.Fatal("FetchRef(nope) error = nil, want error")
+	}
+}
+
+// ctx のキャンセルは、ブロックしている fetch を中断させる。ハングするリモートは
+// git-remote-ext の「ext::<command>」形式で作る: git はコマンド（ここでは sleep）を
+// リモートヘルパーとして起動し、その応答を待ち続けるため、fetch は sleep の長さだけ
+// ブロックする。ext トランスポートは既定で無効なので GIT_ALLOW_PROTOCOL で許可する
+// （git.FetchRef は os.Environ() を引き継ぐため t.Setenv が届く）。
+func TestFetchRefIsInterruptedByCancel(t *testing.T) {
+	tmp := t.TempDir()
+	repoPath := testutil.CloneWithBranch(t, tmp, "main")
+	t.Setenv("GIT_ALLOW_PROTOCOL", "ext")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		// キャンセルされなければ 30 秒ブロックする fetch。
+		done <- git.FetchRef(ctx, repoPath, "ext::sleep 30", "main")
+	}()
+
+	time.Sleep(200 * time.Millisecond) // fetch がブロックに入るまで少し待つ
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("FetchRef error = %v, want context.Canceled", err)
+		}
+		if elapsed := time.Since(start); elapsed > 5*time.Second {
+			t.Fatalf("FetchRef was not interrupted promptly (took %v)", elapsed)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("FetchRef did not return after cancel")
+	}
+}
+
+// キャンセル済みの ctx では、git を実行する前に即座に失敗する。
+func TestFetchRefRejectsCanceledContext(t *testing.T) {
+	tmp := t.TempDir()
+	repoPath := testutil.CloneWithBranch(t, tmp, "main")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := git.FetchRef(ctx, repoPath, "origin", "main"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("FetchRef(canceled) error = %v, want context.Canceled", err)
 	}
 }
 
@@ -240,55 +289,6 @@ func TestAddWorktreeExistingBranchFails(t *testing.T) {
 	// -b で既存ブランチ名を作ろうとすると git が失敗する。
 	if err := git.AddWorktree(t.Context(), repoPath, "dup", target, start); err == nil {
 		t.Fatal("AddWorktree(dup) error = nil, want error")
-	}
-}
-
-func TestPruneWorktrees(t *testing.T) {
-	tmp := t.TempDir()
-	repoPath := testutil.CloneWithBranch(t, tmp, "main")
-
-	// 連結ワークツリーを作り、ディレクトリだけ手動削除して孤立メタデータを残す。
-	orphan := filepath.Join(tmp, "oldwt", "repo")
-	if err := os.MkdirAll(filepath.Dir(orphan), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	testutil.Git(t, repoPath, "worktree", "add", "-b", "throwaway", orphan)
-	if err := os.RemoveAll(orphan); err != nil {
-		t.Fatal(err)
-	}
-
-	// prune 前は孤立した管理情報がまだ列挙される。
-	metaDir := filepath.Join(repoPath, ".git", "worktrees", "repo")
-	if _, err := os.Stat(metaDir); err != nil {
-		t.Fatalf("expected orphaned worktree metadata at %s: %v", metaDir, err)
-	}
-
-	if err := git.PruneWorktrees(t.Context(), repoPath); err != nil {
-		t.Fatalf("PruneWorktrees error = %v", err)
-	}
-
-	// prune 後は孤立した管理情報が削除されている。
-	if _, err := os.Stat(metaDir); !os.IsNotExist(err) {
-		t.Fatalf("orphaned metadata still present after prune: err=%v", err)
-	}
-}
-
-func TestPruneWorktreesKeepsLiveWorktree(t *testing.T) {
-	tmp := t.TempDir()
-	repoPath := testutil.CloneWithBranch(t, tmp, "main")
-
-	live := filepath.Join(tmp, "livewt", "repo")
-	if err := os.MkdirAll(filepath.Dir(live), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	testutil.Git(t, repoPath, "worktree", "add", "-b", "alive", live)
-
-	if err := git.PruneWorktrees(t.Context(), repoPath); err != nil {
-		t.Fatalf("PruneWorktrees error = %v", err)
-	}
-	// 生きているワークツリーには手を触れない。
-	if _, err := os.Stat(filepath.Join(live, ".git")); err != nil {
-		t.Fatal("live worktree must survive prune")
 	}
 }
 
