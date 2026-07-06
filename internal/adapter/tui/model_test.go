@@ -18,7 +18,7 @@ import (
 // モデルの状態遷移だけを検証する。
 func newTestModel(t *testing.T) *model {
 	t.Helper()
-	m := newModel(t.Context(), &config.File{}, statedir.Root{})
+	m := newModel(t.Context(), &config.File{}, statedir.Root{}, &forwarder{})
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	return m
 }
@@ -26,8 +26,9 @@ func newTestModel(t *testing.T) *model {
 // resolved は logTarget 相当のエントリから resolvedMsg を組み立てる。
 func resolved(entries ...server.LogEntry) resolvedMsg {
 	return resolvedMsg{
-		cfg:  &config.File{},
-		logs: &server.LogsResult{Logs: entries},
+		cfg:    &config.File{},
+		logs:   &server.LogsResult{Logs: entries},
+		status: &server.StatusResult{},
 	}
 }
 
@@ -36,12 +37,33 @@ func key(msg string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(msg)}
 	}
 	switch msg {
+	case "tab":
+		return tea.KeyMsg{Type: tea.KeyTab}
 	case "esc":
 		return tea.KeyMsg{Type: tea.KeyEscape}
 	case "enter":
 		return tea.KeyMsg{Type: tea.KeyEnter}
 	}
 	panic("unknown key " + msg)
+}
+
+func TestViewKeysSwitchViews(t *testing.T) {
+	m := newTestModel(t)
+	if m.view != viewLogs {
+		t.Fatalf("initial view = %d", m.view)
+	}
+	m.Update(key("2"))
+	if m.view != viewStatus {
+		t.Fatalf("after '2' view = %d", m.view)
+	}
+	m.Update(key("tab"))
+	if m.view != viewTrees {
+		t.Fatalf("after tab view = %d", m.view)
+	}
+	m.Update(key("tab"))
+	if m.view != viewLogs {
+		t.Fatalf("tab must wrap to logs, got %d", m.view)
+	}
 }
 
 func TestCycleTargetWrapsThroughMerged(t *testing.T) {
@@ -136,5 +158,24 @@ func TestScrollDisablesFollow(t *testing.T) {
 	m.Update(key("f"))
 	if !m.follow {
 		t.Fatal("'f' must re-enable follow")
+	}
+}
+
+// 操作の実行中は q が完了待ちになり、完了メッセージで終了する。
+func TestQuitWaitsForRunningOperation(t *testing.T) {
+	m := newTestModel(t)
+	m.opRunning = true
+	if _, cmd := m.Update(key("q")); cmd != nil {
+		t.Fatal("q during an operation must not quit immediately")
+	}
+	if !m.quitAfterOp {
+		t.Fatal("q during an operation must arm quitAfterOp")
+	}
+	_, cmd := m.Update(opDoneMsg{summary: "done"})
+	if cmd == nil {
+		t.Fatal("operation completion must quit when quitAfterOp is armed")
+	}
+	if msg := cmd(); msg != tea.Quit() {
+		t.Fatalf("expected tea.Quit, got %#v", msg)
 	}
 }
