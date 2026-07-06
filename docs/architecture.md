@@ -11,7 +11,7 @@ Go の標準的なレイアウト（`cmd/` + `internal/`）に従い、責務ご
 
 ```mermaid
 flowchart TB
-    adapter["adapter\ncli ・ mcpserver ・ render"] --> app["app\ncreate ・ server ・ tree"]
+    adapter["adapter\ncli ・ mcpserver ・ tui ・ render"] --> app["app\ncreate ・ server ・ tree"]
     app --> core["core\naction ・ config ・ git ・ hooks ・ server ・ alias"]
     core --> infra["infra\nstore ・ statedir ・ wtenv ・ childio ・ fscopy ・ proc"]
 ```
@@ -23,6 +23,7 @@ internal/
   adapter/
     cli/        コマンドライン解析（cobra）と対話的なリポジトリ選択
     mcpserver/  MCP サーバー（stdio）。ツール定義と app への橋渡し
+    tui/        ターミナル UI（Bubble Tea）。ログ閲覧・状態監視・worktree 切り替え
     render/     ユーザー向け整形（進捗・サマリ・表・JSON）
   ── app（アプリケーション層）──
   app/          解決済みコマンドを各ワークフローへ振り分けるルーター。別名操作と repo 一覧も持つ

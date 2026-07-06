@@ -347,6 +347,12 @@ func TestMCPInvocation(t *testing.T) {
 	}
 }
 
+func TestUIInvocation(t *testing.T) {
+	if _, ok := parse(t, "ui").(RunUI); !ok {
+		t.Fatal("expected RunUI for the ui subcommand")
+	}
+}
+
 // `config check` は ConfigCheck を返す。config は既知のサブコマンドであり
 // （予約語ではない）、引数無しの `config` は cobra のヘルプに落ちる。
 func TestConfigCheckInvocation(t *testing.T) {
