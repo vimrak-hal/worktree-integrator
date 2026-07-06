@@ -30,6 +30,7 @@ import (
 	"github.com/vimrak-hal/worktree-integrator/internal/adapter/cli"
 	"github.com/vimrak-hal/worktree-integrator/internal/adapter/mcpserver"
 	"github.com/vimrak-hal/worktree-integrator/internal/adapter/render"
+	"github.com/vimrak-hal/worktree-integrator/internal/adapter/tui"
 	"github.com/vimrak-hal/worktree-integrator/internal/app"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/action"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/config"
@@ -87,6 +88,18 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 1
 	}
+
+	// TUI は実行モードだが、設定と状態ルートを必要とするためここでさばく。App は
+	// adapter/tui が TUI 専用の依存（子プロセス IO の切り離し・イベントの画面転送）で
+	// 組み直すため、下の CLI 用 App は使わない。
+	if _, ok := inv.(cli.RunUI); ok {
+		if err := tui.Run(ctx, file, root); err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return exitCode(ctx, err)
+		}
+		return 0
+	}
+
 	a := &app.App{
 		Config:  file,
 		Root:    root,

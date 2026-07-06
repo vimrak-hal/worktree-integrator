@@ -67,6 +67,7 @@ nav:
       - Usage: usage.md
   - 機能:
       - Server Management: server-management.md
+      - Terminal UI: tui.md
       - MCP Server: mcp-server.md
   - 設定:
       - Configuration: configuration.md

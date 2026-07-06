@@ -99,11 +99,16 @@ func Logs(ctx context.Context, d Deps, cmd action.ServerCommand, k action.LogsKi
 }
 
 // readEntry は 1 つのログファイルの末尾 n 行を読み取って LogEntry に写す。
-// 存在しなければ Missing、読めなければ Error を立てる。
+// 存在しなければ Missing、読めなければ Error を立てる。lines が 0 以下なら本文を
+// 読まずパスの解決だけを返す（TUI が自前の増分読みのためにパスだけを定期取得する
+// 経路。全読みを毎ティック繰り返さない）。
 func readEntry(repo, server, path string, lines int) LogEntry {
 	entry := LogEntry{Repo: repo, Server: server, Path: path}
 	if !pathExists(path) {
 		entry.Missing = true
+		return entry
+	}
+	if lines <= 0 {
 		return entry
 	}
 	data, err := os.ReadFile(path)
