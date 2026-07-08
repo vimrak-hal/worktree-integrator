@@ -48,8 +48,8 @@ wt ui
 | `Enter` / `s` | 選択 worktree へサーバーを切り替え | `wt server switch <name>` |
 | `r` | 既に稼働中でも再起動して切り替え | `wt server switch --restart <name>` |
 | `x` | 選択 worktree のサーバーを停止 | `wt server stop <name>` |
-| `n` | worktree を作成（名前入力 → 作成先リポジトリ選択） | `wt create <name>` |
-| `D` | 選択 worktree を削除（`y` で確認） | `wt remove <name>` |
+| `n` | worktree を作成（名前と作成先リポジトリを 1 枚のフォームで入力） | `wt create <name>` |
+| `D` | 選択 worktree を削除（確認フォームで実行／中止） | `wt remove <name>` |
 | `a` | 選択 worktree の別名を設定／削除 | `wt alias set` / `wt alias remove` |
 | `!` | 自己診断を実行（結果は右ペインに表示） | `wt doctor` |
 | `R` | 一覧を再取得 | `wt list` |
@@ -71,12 +71,17 @@ wt ui
 
 ## プロンプト・結果ペインのキー
 
+作成・別名・削除の確認は [huh](https://github.com/charmbracelet/huh) のフォームで
+入力します。フィルタ（`/`）だけはライブ反映のインライン入力のため従来どおりです。
+
 | 文脈 | キー | 動作 |
 | --- | --- | --- |
-| 名前入力（作成） | `Enter` / `Esc` | 確定して作成先選択へ / 中止 |
-| 作成先リポジトリ選択 | `j`/`k`・`space`・`a`・`Enter`・`Esc` | 移動 / 切替 / 全選択切替 / 実行 / 中止 |
-| 別名入力 | `Enter` / `Esc` | 確定（空で削除） / 中止 |
-| 削除の確認 | `y` / 他キー | 削除実行 / 中止 |
+| 作成フォーム（`n`） | `Tab` / `↑` / `↓` | 名前入力とリポジトリ選択の間を移動 |
+| 作成フォーム（`n`） | `space` | カーソル位置のリポジトリの選択を切替 |
+| 作成フォーム（`n`） | `Enter` | フォームを確定して作成を実行 |
+| 別名フォーム（`a`） | `Enter` / `Esc` | 確定（空で削除） / 中止 |
+| 削除の確認（`D`） | `←`/`→`・`Enter` / `Esc` | 「削除する／やめる」を選び確定 / 中止 |
+| フォーム共通 | `Esc` | 中止（何もせずに閉じる） |
 | doctor 結果 | `F`・`j`/`k`・`Esc` | `--fix` で再実行 / スクロール / 閉じる |
 
 ## TUI の各操作と CLI コマンドの対応

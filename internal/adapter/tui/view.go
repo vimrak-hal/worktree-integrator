@@ -56,6 +56,19 @@ func (m *model) paneTitle(label string, f focusID) string {
 // logTitle は右ペインの見出し: 対象（repo/server @ worktree）と、モードのフラグ
 // （追従・前世代・フィルタ／入力中の input.View()）。doctor 結果表示中は専用の見出し。
 func (m *model) logTitle() string {
+	if m.form != nil {
+		// フォーム表示中は種類ごとの見出しに切り替える。
+		label := " 入力中 "
+		switch m.formKind {
+		case formCreate:
+			label = " worktree 作成 "
+		case formAlias:
+			label = " 別名 "
+		case formRemove:
+			label = " 削除の確認 "
+		}
+		return m.paneTitle(label, focusLog)
+	}
 	if m.doctorMode {
 		return m.paneTitle(" doctor 結果 ", focusLog)
 	}
@@ -203,36 +216,14 @@ func markColored(n node) string {
 	}
 }
 
-// rightLines は右ペインの行を返す。作成先リポジトリの選択モーダル中はチェックリストを、
-// それ以外はビューポート（ログ／doctor 結果）を描く。
+// rightLines は右ペインの行を返す。huh フォーム表示中はフォームを、それ以外は
+// ビューポート（ログ／doctor 結果）を描く。フォームは通常時のみ開くため doctor
+// 結果より優先してよい。
 func (m *model) rightLines() []string {
-	if m.prompt == promptCreateRepos {
-		return m.createReposLines()
+	if m.form != nil {
+		return strings.Split(m.form.View(), "\n")
 	}
 	return strings.Split(m.vp.View(), "\n")
-}
-
-// createReposLines は作成先リポジトリの選択モーダルを組む。
-func (m *model) createReposLines() []string {
-	lines := []string{
-		styFlag.Render("作成先リポジトリを選択（space 切替 / a 全て / Enter 実行 / Esc 中止）"),
-		"worktree 名: " + m.createName,
-		"",
-	}
-	if m.repos != nil {
-		for i, r := range m.repos.Repos {
-			box := "[ ]"
-			if i < len(m.repoChecked) && m.repoChecked[i] {
-				box = "[x]"
-			}
-			text := box + " " + r.Name
-			if i == m.repoSel {
-				text = stySelected.Render(text)
-			}
-			lines = append(lines, text)
-		}
-	}
-	return lines
 }
 
 // joinPanes は左右のペイン行を "│" で縦に結合し、行数を h に揃える。左カラムは幅 leftW

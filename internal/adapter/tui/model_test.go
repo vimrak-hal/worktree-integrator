@@ -196,64 +196,128 @@ func TestQuitWaitsForRunningOperation(t *testing.T) {
 	}
 }
 
-// n → 名前入力 → reposMsg 受信で作成先モーダルになり、Enter で createCmd が発行される。
-func TestCreateFlowReachesReposModal(t *testing.T) {
+// n → reposMsg 受信で作成フォーム（名前入力 + リポジトリ複数選択）が 1 枚で開く。
+func TestCreateFlowOpensForm(t *testing.T) {
 	m := newTestModel(t)
-	m.Update(key("n"))
-	if m.prompt != promptCreateName {
-		t.Fatalf("n must open the name prompt, got %d", m.prompt)
+	m.Update(key("n")) // reposCmd を発行（この時点ではまだフォームは無い）
+	if m.form != nil {
+		t.Fatal("n before reposMsg must not open a form yet")
 	}
-	m.input.SetValue("feat-x")
-	m.Update(key("enter")) // 名前確定 → reposCmd
 
 	m.Update(reposMsg{res: &app.ReposResult{Repos: []app.RepoInfo{{Name: "api"}, {Name: "web"}}}})
-	if m.prompt != promptCreateRepos {
-		t.Fatalf("reposMsg must open the repos modal, got %d", m.prompt)
+	if m.form == nil || m.formKind != formCreate {
+		t.Fatalf("reposMsg must open the create form, got form=%v kind=%d", m.form != nil, m.formKind)
 	}
-	if len(m.repoChecked) != 2 || !m.repoChecked[0] || !m.repoChecked[1] {
-		t.Fatalf("repos must default to all-checked, got %v", m.repoChecked)
+	// 名前入力欄とリポジトリ選択の両方が 1 枚のフォームに含まれる。
+	view := m.form.View()
+	for _, want := range []string{"worktree 名", "作成先リポジトリ", "api", "web"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("create form view missing %q", want)
+		}
 	}
-	m.Update(key(" ")) // 1 件目を解除
-	if m.repoChecked[0] {
-		t.Fatal("space must toggle the selected repo off")
-	}
-	_, cmd := m.Update(key("enter"))
+}
+
+// 作成フォームの完了処理: 名前とリポジトリを持つ完了状態から createCmd を dispatch する。
+func TestFinishCreateForm(t *testing.T) {
+	m := newTestModel(t)
+	m.formKind = formCreate
+	m.formName = "feat-x"
+	m.formRepos = []string{"api"}
+	_, cmd := m.finishForm()
 	if cmd == nil {
-		t.Fatal("Enter with a selection must return a create command")
+		t.Fatal("finishForm with a name and repos must return a create command")
 	}
 	if !m.opRunning {
 		t.Fatal("create must mark an operation as running")
 	}
 }
 
-// D → y で削除コマンドが発行される。
+// 名前が空・リポジトリ 0 件の作成フォームは note を出して破棄する（操作は起きない）。
+func TestFinishCreateFormRejectsEmpty(t *testing.T) {
+	m := newTestModel(t)
+	m.formKind = formCreate
+	m.formName = "  "
+	m.formRepos = []string{"api"}
+	if _, cmd := m.finishForm(); cmd != nil || m.opRunning {
+		t.Fatal("empty name must not start an operation")
+	}
+	if !m.noteErr {
+		t.Fatal("empty name must set an error note")
+	}
+
+	m2 := newTestModel(t)
+	m2.formKind = formCreate
+	m2.formName = "feat-x"
+	m2.formRepos = nil
+	if _, cmd := m2.finishForm(); cmd != nil || m2.opRunning {
+		t.Fatal("zero repos must not start an operation")
+	}
+}
+
+// D は削除確認フォームを開き、対象を保持する。formConfirm=true の完了で removeCmd。
 func TestRemoveConfirmFlow(t *testing.T) {
 	m := newTestModel(t)
 	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a"})
 	m.buildNodes()
 	m.Update(key("D"))
-	if m.prompt != promptConfirmRemove || m.promptTarget != "feat-a" {
-		t.Fatalf("D must arm remove confirm for feat-a, got prompt=%d target=%q", m.prompt, m.promptTarget)
+	if m.form == nil || m.formKind != formRemove || m.promptTarget != "feat-a" {
+		t.Fatalf("D must open the remove form for feat-a, got form=%v kind=%d target=%q",
+			m.form != nil, m.formKind, m.promptTarget)
 	}
-	_, cmd := m.Update(key("y"))
+
+	// 承認（true）で削除コマンドが発行される。
+	m.formConfirm = true
+	_, cmd := m.finishForm()
 	if cmd == nil {
-		t.Fatal("y must return a remove command")
+		t.Fatal("confirmed remove must return a remove command")
 	}
 	if !m.opRunning {
 		t.Fatal("remove must mark an operation as running")
 	}
 }
 
-// a は選択 worktree の現在の別名を入力欄にプリフィルする。
+// 削除確認を否定（false）した完了では何も起きない。
+func TestRemoveConfirmDeclined(t *testing.T) {
+	m := newTestModel(t)
+	m.promptTarget = "feat-a"
+	m.formKind = formRemove
+	m.formConfirm = false
+	if _, cmd := m.finishForm(); cmd != nil || m.opRunning {
+		t.Fatal("declined remove must not start an operation")
+	}
+}
+
+// a は選択 worktree の現在の別名を別名フォームにプリフィルする。
 func TestAliasPrefill(t *testing.T) {
 	m := newTestModel(t)
 	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Alias: "ログイン画面"})
 	m.buildNodes()
 	m.Update(key("a"))
-	if m.prompt != promptAlias {
-		t.Fatalf("a must open the alias prompt, got %d", m.prompt)
+	if m.form == nil || m.formKind != formAlias {
+		t.Fatalf("a must open the alias form, got form=%v kind=%d", m.form != nil, m.formKind)
 	}
-	if got := m.input.Value(); got != "ログイン画面" {
-		t.Fatalf("alias prompt must prefill the current alias, got %q", got)
+	if m.formAlias != "ログイン画面" {
+		t.Fatalf("alias form must prefill the current alias, got %q", m.formAlias)
+	}
+	if !strings.Contains(m.form.View(), "ログイン画面") {
+		t.Error("alias form view must show the prefilled alias")
+	}
+}
+
+// Esc 相当（StateAborted）でフォームが畳まれ、note は出ない。
+func TestFormAbortClearsWithoutNote(t *testing.T) {
+	m := newTestModel(t)
+	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a"})
+	m.buildNodes()
+	m.Update(key("D"))
+	if m.form == nil {
+		t.Fatal("D must open the remove form")
+	}
+	m.Update(key("esc"))
+	if m.form != nil || m.formKind != formNone {
+		t.Fatalf("Esc must clear the form, got form=%v kind=%d", m.form != nil, m.formKind)
+	}
+	if m.note != "" {
+		t.Fatalf("aborting a form must not leave a note, got %q", m.note)
 	}
 }

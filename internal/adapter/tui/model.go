@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/app"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/server"
@@ -35,10 +36,6 @@ type promptMode int
 const (
 	promptNone promptMode = iota
 	promptFilter
-	promptCreateName
-	promptCreateRepos
-	promptAlias
-	promptConfirmRemove
 )
 
 // バッファの保持行数と描画上限。単一サーバーのログだけを表示するため、マージ用の
@@ -147,14 +144,22 @@ type model struct {
 	input     textinput.Model
 
 	// --- モーダル・結果ペイン ---
-	prompt     promptMode
-	createName string
-	// promptTarget は alias / remove プロンプトの対象 worktree 名（プロンプトを
-	// 開いた時点のカーソル位置を固定して保持する）。
+	prompt promptMode
+	// promptTarget は alias / remove フォームの対象 worktree 名（フォームを開いた
+	// 時点のカーソル位置を固定して保持する）。
 	promptTarget string
 	repos        *app.ReposResult
-	repoChecked  []bool
-	repoSel      int
+
+	// --- huh フォーム（作成・別名・削除確認） ---
+	// form が非 nil の間はキー入力をフォームが最優先で消費する。formKind はどの
+	// フォームかを表し、完了時に finishForm が値を取り出して dispatch する。値は
+	// 各 form* フィールドへポインタでバインドされる。
+	form        *huh.Form
+	formKind    formKind
+	formName    string
+	formRepos   []string
+	formAlias   string
+	formConfirm bool
 	// doctorText / doctorMode は doctor 結果の右ペイン表示。doctorMode 中は vp の
 	// 内容が doctorText になる（rebuildLog が出し分ける）。
 	doctorText []string
@@ -201,6 +206,13 @@ func (m *model) Init() tea.Cmd {
 // 24〜40 桁に収める。
 func (m *model) leftW() int {
 	return clamp(m.width/3, 24, 40)
+}
+
+// rightW は右ペイン（ログ・フォーム）の表示幅。左ペインと区切り "│" を除いた残り。
+// ビューポート幅（Update の WindowSizeMsg で決まる幅）と同じ計算で、huh フォームの
+// 幅指定にも使う。
+func (m *model) rightW() int {
+	return max(1, m.width-m.leftW()-1)
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -253,17 +265,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case reposMsg:
 		if msg.err != nil {
 			m.note, m.noteErr = "リポジトリ一覧の取得に失敗: "+msg.err.Error(), true
-			m.prompt = promptNone
 			return m, nil
 		}
 		m.repos = msg.res
-		m.repoChecked = make([]bool, len(msg.res.Repos))
-		for i := range m.repoChecked {
-			m.repoChecked[i] = true
-		}
-		m.repoSel = 0
-		m.prompt = promptCreateRepos
-		return m, nil
+		m.formName = ""
+		m.formRepos = nil
+		m.form = newCreateForm(msg.res.Repos, &m.formName, &m.formRepos, m.rightW())
+		m.formKind = formCreate
+		return m, m.form.Init()
 
 	case eventMsg:
 		m.events = append(m.events, msg.line)
@@ -303,6 +312,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.updateKey(msg)
 	}
+	// huh フォームは Enter などのキーを内部メッセージ（次フィールドへ・確定）に変換し、
+	// コマンド経由で自分宛てに送り返してくる。KeyMsg 以外のそれらもフォームへ届けないと
+	// 確定が永遠に完了しない。
+	if m.form != nil {
+		return m.updateForm(msg)
+	}
 	return m, nil
 }
 
@@ -313,17 +328,13 @@ func (m *model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 
-	switch m.prompt {
-	case promptFilter:
+	// huh フォーム表示中は Ctrl-C 以外の全キーをフォームが消費する。
+	if m.form != nil {
+		return m.updateForm(msg)
+	}
+
+	if m.prompt == promptFilter {
 		return m.updateFilterKey(msg)
-	case promptCreateName:
-		return m.updateCreateNameKey(msg)
-	case promptAlias:
-		return m.updateAliasKey(msg)
-	case promptCreateRepos:
-		return m.updateCreateReposKey(msg)
-	case promptConfirmRemove:
-		return m.updateConfirmRemoveKey(msg)
 	}
 
 	if m.doctorMode {
@@ -397,111 +408,6 @@ func (m *model) updateFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateCreateNameKey は worktree 名の入力。Enter で確定して作成先リポジトリの
-// 選択モーダルへ進む（reposCmd）。
-func (m *model) updateCreateNameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyEnter:
-		name := strings.TrimSpace(m.input.Value())
-		if name == "" {
-			m.note, m.noteErr = "worktree 名を入力してください", true
-			return m, nil
-		}
-		m.createName = name
-		m.prompt = promptNone
-		m.input.Blur()
-		return m, m.reposCmd()
-	case tea.KeyEscape:
-		m.prompt = promptNone
-		m.input.Blur()
-		return m, nil
-	default:
-		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(msg)
-		return m, cmd
-	}
-}
-
-// updateAliasKey は別名の入力。Enter で確定（空なら削除）、Esc で中止。
-func (m *model) updateAliasKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyEnter:
-		label := strings.TrimSpace(m.input.Value())
-		name := m.promptTarget
-		m.prompt = promptNone
-		m.input.Blur()
-		return m.startOp("alias "+name, m.aliasCmd(name, label))
-	case tea.KeyEscape:
-		m.prompt = promptNone
-		m.input.Blur()
-		return m, nil
-	default:
-		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(msg)
-		return m, cmd
-	}
-}
-
-// updateCreateReposKey は作成先リポジトリの選択モーダル。
-func (m *model) updateCreateReposKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	n := 0
-	if m.repos != nil {
-		n = len(m.repos.Repos)
-	}
-	switch {
-	case kb.Matches(msg, m.keys.Down):
-		if m.repoSel < n-1 {
-			m.repoSel++
-		}
-	case kb.Matches(msg, m.keys.Up):
-		if m.repoSel > 0 {
-			m.repoSel--
-		}
-	case kb.Matches(msg, m.keys.ToggleRepo):
-		if m.repoSel >= 0 && m.repoSel < len(m.repoChecked) {
-			m.repoChecked[m.repoSel] = !m.repoChecked[m.repoSel]
-		}
-	case kb.Matches(msg, m.keys.AllRepos):
-		// 全選択 / 全解除のトグル（1 つでも未選択なら全選択、そうでなければ全解除）。
-		all := true
-		for _, c := range m.repoChecked {
-			if !c {
-				all = false
-				break
-			}
-		}
-		for i := range m.repoChecked {
-			m.repoChecked[i] = !all
-		}
-	case kb.Matches(msg, m.keys.Confirm):
-		var repos []string
-		for i, c := range m.repoChecked {
-			if c {
-				repos = append(repos, m.repos.Repos[i].Name)
-			}
-		}
-		if len(repos) == 0 {
-			m.note, m.noteErr = "リポジトリを 1 つ以上選択してください", true
-			return m, nil
-		}
-		m.prompt = promptNone
-		return m.startOp("create "+m.createName, m.createCmd(m.createName, repos))
-	case kb.Matches(msg, m.keys.Cancel):
-		m.prompt = promptNone
-	}
-	return m, nil
-}
-
-// updateConfirmRemoveKey は削除の確認。y のみ実行、それ以外は中止。
-func (m *model) updateConfirmRemoveKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if kb.Matches(msg, m.keys.RemoveYes) {
-		m.prompt = promptNone
-		return m.startOp("remove "+m.promptTarget, m.removeCmd(m.promptTarget))
-	}
-	m.prompt = promptNone
-	return m, nil
-}
-
 // updateDoctorKey は doctor 結果ペイン中のキー操作。q は終了ではなく結果を閉じる。
 func (m *model) updateDoctorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
@@ -549,25 +455,24 @@ func (m *model) updateTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case kb.Matches(msg, m.keys.Refresh):
 		return m, m.treesCmd()
 	case kb.Matches(msg, m.keys.New):
-		m.prompt = promptCreateName
-		m.input.Prompt = "名前: "
-		m.input.Placeholder = "worktree 名"
-		m.input.SetValue("")
-		m.input.Focus()
+		// 候補取得中は opRunning ガードを掛けない（reposMsg 受信で作成フォームを
+		// 開く。名前とリポジトリ選択は 1 枚のフォームに統合されている）。
+		return m, m.reposCmd()
 	case kb.Matches(msg, m.keys.Delete):
 		if wt, ok := m.selectedWorktree(); ok {
 			m.promptTarget = wt
-			m.prompt = promptConfirmRemove
+			m.formConfirm = false
+			m.form = newRemoveForm(wt, &m.formConfirm, m.rightW())
+			m.formKind = formRemove
+			return m, m.form.Init()
 		}
 	case kb.Matches(msg, m.keys.Alias):
 		if wt, ok := m.selectedWorktree(); ok {
 			m.promptTarget = wt
-			m.prompt = promptAlias
-			m.input.Prompt = "別名: "
-			m.input.Placeholder = "表示用の別名（空で削除）"
-			m.input.SetValue(m.selectedAlias())
-			m.input.CursorEnd()
-			m.input.Focus()
+			m.formAlias = m.selectedAlias()
+			m.form = newAliasForm(&m.formAlias, m.rightW())
+			m.formKind = formAlias
+			return m, m.form.Init()
 		}
 	}
 	return m, nil

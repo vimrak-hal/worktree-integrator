@@ -1,8 +1,6 @@
 package tui
 
 import (
-	"fmt"
-
 	"github.com/charmbracelet/bubbles/help"
 	kb "github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/lipgloss"
@@ -47,13 +45,12 @@ type keyMap struct {
 	LineUp      kb.Binding // 表示は "j/k スクロール"
 	ClearFilter kb.Binding
 
-	// --- プロンプト・doctor 結果（表示にも matching にも使う） ---
-	Confirm    kb.Binding
-	Cancel     kb.Binding
-	ToggleRepo kb.Binding
-	AllRepos   kb.Binding
-	Fix        kb.Binding
-	RemoveYes  kb.Binding
+	// --- フィルタ・doctor 結果（表示にも matching にも使う） ---
+	// 作成・別名・削除の各モーダルは huh フォームへ移したため、切替（space）・全選択
+	// （a）・削除確認（y）といったモーダル専用キーはここには持たない（huh が担う）。
+	Confirm kb.Binding
+	Cancel  kb.Binding
+	Fix     kb.Binding
 
 	// --- 表示専用（フォーカス切替の文脈別ラベル） ---
 	// 現行 helpLine の「Tab→ログ」「Tab→ツリー」という文脈依存ラベルを再現する。
@@ -92,12 +89,9 @@ func newKeyMap() keyMap {
 		LineUp:      kb.NewBinding(kb.WithKeys("k", "up"), kb.WithHelp("j/k", "スクロール")),
 		ClearFilter: kb.NewBinding(kb.WithKeys("esc"), kb.WithHelp("esc", "解除")),
 
-		Confirm:    kb.NewBinding(kb.WithKeys("enter"), kb.WithHelp("Enter", "確定/実行")),
-		Cancel:     kb.NewBinding(kb.WithKeys("esc"), kb.WithHelp("Esc", "中止/閉じる")),
-		ToggleRepo: kb.NewBinding(kb.WithKeys(" "), kb.WithHelp("space", "切替")),
-		AllRepos:   kb.NewBinding(kb.WithKeys("a"), kb.WithHelp("a", "全て")),
-		Fix:        kb.NewBinding(kb.WithKeys("F"), kb.WithHelp("F", "--fix 実行")),
-		RemoveYes:  kb.NewBinding(kb.WithKeys("y"), kb.WithHelp("y", "削除実行")),
+		Confirm: kb.NewBinding(kb.WithKeys("enter"), kb.WithHelp("Enter", "確定/実行")),
+		Cancel:  kb.NewBinding(kb.WithKeys("esc"), kb.WithHelp("Esc", "中止/閉じる")),
+		Fix:     kb.NewBinding(kb.WithKeys("F"), kb.WithHelp("F", "--fix 実行")),
 
 		FocusToLog:  kb.NewBinding(kb.WithKeys("tab"), kb.WithHelp("Tab", "→ログ")),
 		FocusToTree: kb.NewBinding(kb.WithKeys("tab"), kb.WithHelp("Tab", "→ツリー")),
@@ -134,40 +128,21 @@ func staticHelp(keyLabel, desc string) kb.Binding {
 // contextBindings は現在の文脈（プロンプト各種 / doctor 結果 / フォーカス）で表示すべき
 // キーヘルプの並びを返す。項目・順序・日本語ラベルは移行前の helpLine を踏襲する。
 func (m *model) contextBindings() []kb.Binding {
-	switch m.prompt {
-	case promptFilter:
+	// huh フォーム表示中は huh の操作を日本語で要約する（キーの実処理は huh 側。
+	// ここは表示専用なので固定の Binding 列で統一感を優先する）。
+	if m.form != nil {
+		return []kb.Binding{
+			staticHelp("Tab/↓", "次へ"),
+			staticHelp("space", "切替"),
+			staticHelp("Enter", "確定"),
+			staticHelp("Esc", "中止"),
+		}
+	}
+	if m.prompt == promptFilter {
 		return []kb.Binding{
 			staticHelp("入力でフィルタ", ""),
 			withHelp(m.keys.Confirm, "Enter", "確定"),
 			withHelp(m.keys.ClearFilter, "Esc", "解除"),
-		}
-	case promptCreateName:
-		return []kb.Binding{
-			staticHelp("worktree 名を入力", ""),
-			withHelp(m.keys.Confirm, "Enter", "次へ"),
-			withHelp(m.keys.Cancel, "Esc", "中止"),
-		}
-	case promptAlias:
-		return []kb.Binding{
-			staticHelp("別名を入力（空で削除）", ""),
-			withHelp(m.keys.Confirm, "Enter", "確定"),
-			withHelp(m.keys.Cancel, "Esc", "中止"),
-		}
-	case promptCreateRepos:
-		return []kb.Binding{
-			withHelp(m.keys.Up, "j/k", "選択"),
-			withHelp(m.keys.ToggleRepo, "space", "切替"),
-			withHelp(m.keys.AllRepos, "a", "全て"),
-			withHelp(m.keys.Confirm, "Enter", "実行"),
-			withHelp(m.keys.Cancel, "Esc", "中止"),
-		}
-	case promptConfirmRemove:
-		// 破壊的操作の確認は対象を明示する（どの worktree に y するのかを押す瞬間に
-		// 画面が示す）。
-		return []kb.Binding{
-			staticHelp(fmt.Sprintf("worktree %q を削除しますか？", m.promptTarget), ""),
-			withHelp(m.keys.RemoveYes, "y", "実行"),
-			staticHelp("他キー", "中止"),
 		}
 	}
 	if m.doctorMode {
