@@ -4,38 +4,29 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-
-	"github.com/vimrak-hal/worktree-integrator/internal/app/server"
 )
 
-// View は現在のモデルを 1 画面に描画する。レイアウトは固定 4 行のクローム
-// （ヘッダー: タブ + コンテキストバー、フッター: メッセージ + キーヘルプ）と本文で、
-// 本文の高さはビューポートと同じ height-4 に揃える。
+// View は現在のモデルを 1 画面に描画する。レイアウトは lazygit 風の 2 ペイン: 固定 3 行の
+// クローム（ペインタイトル行・note 行・ヘルプ行）と、その間の本文（左=ツリー、右=ログ／
+// doctor 結果／作成モーダル）を "│" で縦に区切る。本文の高さはビューポートと同じ
+// height-3 に揃える。
 func (m *model) View() string {
 	if !m.ready {
 		return "起動中…"
 	}
-	var context string
-	var body []string
-	switch m.view {
-	case viewLogs:
-		context = m.logsBar()
-		body = []string{m.vp.View()}
-	case viewStatus:
-		context = styFlag.Render("サーバー状態（2 秒ごとに更新）")
-		body = m.statusBody()
-	case viewTrees:
-		context = styFlag.Render("worktree 一覧（Enter で switch）")
-		body = m.treesBody()
+	lw := m.leftW()
+	bodyH := max(1, m.height-3)
+
+	left := m.treeLines(bodyH)
+	right := m.rightLines()
+	body := joinPanes(left, right, lw, bodyH)
+	for i := range body {
+		// 右端のはみ出しで行が折れないよう全体行を端末幅に収める。
+		body[i] = truncLine(body[i], m.width)
 	}
 
-	bodyHeight := max(1, m.height-4)
-	body = fitHeight(body, bodyHeight)
-
 	var b strings.Builder
-	b.WriteString(m.tabs())
-	b.WriteString("\n")
-	b.WriteString(truncLine(context, m.width))
+	b.WriteString(truncLine(m.titleLine(lw), m.width))
 	b.WriteString("\n")
 	b.WriteString(strings.Join(body, "\n"))
 	b.WriteString("\n")
@@ -45,40 +36,34 @@ func (m *model) View() string {
 	return b.String()
 }
 
-// tabs はビュー切り替えのタブ行。
-func (m *model) tabs() string {
-	names := []string{"1:ログ", "2:ステータス", "3:worktree"}
-	parts := make([]string, len(names))
-	for i, name := range names {
-		if viewID(i) == m.view {
-			parts[i] = styTabActive.Render(name)
-		} else {
-			parts[i] = styTabInactive.Render(name)
-		}
-	}
-	return truncLine(strings.Join(parts, " "), m.width)
+// titleLine はペインタイトル行（左=WORKTREES、右=ログ対象とフラグ）。フォーカス側が
+// 反転で強調される。
+func (m *model) titleLine(lw int) string {
+	left := padDisplay(m.paneTitle(" WORKTREES ", focusTree), lw)
+	return left + "│" + m.logTitle()
 }
 
-// logsBar はログビューのコンテキストバー: 対象の巡回リストと、モードのフラグ
-// （追従・前世代・worktree 絞り込み・フィルタ）。
-func (m *model) logsBar() string {
-	var parts []string
-	sel := func(label string, active bool) string {
-		if active {
-			return stySelected.Render(" " + label + " ")
-		}
-		return " " + label + " "
+// paneTitle はペイン見出しを、フォーカスの有無で色分けして描く。
+func (m *model) paneTitle(label string, f focusID) string {
+	if m.focus == f {
+		return styPaneTitleFocus.Render(label)
 	}
-	parts = append(parts, sel("すべて", m.selKey == ""))
-	for _, t := range m.targets {
-		label := t.key()
-		if t.missing {
-			label += "(なし)"
-		} else if t.readErr != "" {
-			label += "(!)"
-		}
-		parts = append(parts, sel(label, m.selKey == t.key()))
+	return styPaneTitle.Render(label)
+}
+
+// logTitle は右ペインの見出し: 対象（repo/server @ worktree）と、モードのフラグ
+// （追従・前世代・フィルタ／入力中の input.View()）。doctor 結果表示中は専用の見出し。
+func (m *model) logTitle() string {
+	if m.doctorMode {
+		return m.paneTitle(" doctor 結果 ", focusLog)
 	}
+	label := " ログ "
+	if m.curKey != "" {
+		if wt, repo, srv, ok := splitKey(m.curKey); ok {
+			label = fmt.Sprintf(" ログ: %s/%s @ %s ", repo, srv, wt)
+		}
+	}
+	title := m.paneTitle(label, focusLog)
 
 	var flags []string
 	if m.follow {
@@ -87,145 +72,205 @@ func (m *model) logsBar() string {
 	if m.prev {
 		flags = append(flags, "前世代(.prev)")
 	}
-	if m.scope != "" {
-		flags = append(flags, "worktree:"+m.scope)
-	}
-	if m.filtering {
+	if m.prompt == promptFilter {
 		flags = append(flags, m.input.View())
 	} else if m.filter != "" {
 		flags = append(flags, "/"+m.filter)
 	}
-	bar := strings.Join(parts, "|")
+	if m.curReadErr != "" {
+		flags = append(flags, "読取失敗")
+	}
 	if len(flags) > 0 {
-		bar += "  " + styFlag.Render(strings.Join(flags, " "))
+		title += " " + styFlag.Render(strings.Join(flags, " "))
 	}
-	return bar
+	return title
 }
 
-// statusBody はステータステーブルの行を組み立てる（選択行は反転）。
-func (m *model) statusBody() []string {
-	if m.status == nil {
-		return []string{"読み込み中…"}
-	}
-	if len(m.status.Rows) == 0 {
-		if m.status.NoServerConfig {
-			return []string{"サーバー設定がありません（[servers.*] を設定してください）"}
-		}
-		return []string{"対象のサーバーがありません"}
-	}
-	rows := []string{styHeaderRow.Render(statusLine("REPO", "SERVER", "WORKTREE", "ALIAS", "PID", "状態"))}
-	for i, r := range m.status.Rows {
-		pid := "-"
-		if r.Pid != 0 {
-			pid = strconv.Itoa(r.Pid)
-		}
-		text := statusLine(r.Repo, r.Server, orDash(r.Worktree), orDash(r.Alias), pid, "")
-		state := stateCell(r.State)
-		if i == m.statusSel {
-			// 反転は状態の色と競合するため、選択行は行全体を反転して状態はラベルのみ。
-			rows = append(rows, stySelected.Render(text+statePlain(r.State)))
-		} else {
-			rows = append(rows, text+state)
-		}
-	}
-	rows = append(rows, m.commonWarnings(m.status.LegacyBackup, m.status.UnknownRepos)...)
-	return rows
-}
-
-// statusLine は列を表示幅で整形する（状態列は色付けのため呼び出し側が連結する）。
-func statusLine(repo, srv, wt, alias, pid, state string) string {
-	return pad(repo, 16) + pad(srv, 12) + pad(wt, 16) + pad(alias, 20) + pad(pid, 8) + state
-}
-
-// stateCell / statePlain はサーバー状態のラベル（色付き / 無色）。語彙は
-// render.stateLabel と揃える。閉じた語彙のため、未知の値はバグでありパニックさせる。
-func statePlain(state string) string {
-	switch state {
-	case server.StateRunning:
-		return "稼働中 ✓"
-	case server.StateCrashed:
-		return "クラッシュ ✗"
-	case server.StateStopped:
-		return "停止 -"
-	default:
-		panic(fmt.Sprintf("unknown server state %q", state))
-	}
-}
-
-func stateCell(state string) string {
-	label := statePlain(state)
-	switch state {
-	case server.StateRunning:
-		return styStateRunning.Render(label)
-	case server.StateCrashed:
-		return styStateCrashed.Render(label)
-	default:
-		return styStateStopped.Render(label)
-	}
-}
-
-// treesBody は worktree 一覧と、直近のサーバーイベント履歴を組み立てる。
-func (m *model) treesBody() []string {
-	var rows []string
-	switch {
-	case m.treesErr != "":
-		rows = append(rows, styErrNote.Render("worktree 一覧の取得に失敗: "+m.treesErr))
-	case m.trees == nil:
-		rows = append(rows, "読み込み中…")
-	case len(m.trees.Worktrees) == 0:
-		rows = append(rows, "worktree がありません（`wt <name>` で作成できます）")
-	default:
-		for i, wt := range m.trees.Worktrees {
-			name := wt.Name
-			if wt.Alias != "" {
-				name += " (" + wt.Alias + ")"
-			}
-			if wt.Broken {
-				name += " (!)"
-			}
-			var servers []string
-			for _, s := range wt.Servers {
-				servers = append(servers, fmt.Sprintf("%s/%s(pid %d)", s.Repo, s.Server, s.Pid))
-			}
-			detail := fmt.Sprintf("repos:%d", len(wt.Repos))
-			if len(servers) > 0 {
-				detail += "  稼働: " + strings.Join(servers, ", ")
-			}
-			text := pad(name, 34) + detail
-			if i == m.treeSel {
-				rows = append(rows, stySelected.Render(text))
-			} else {
-				rows = append(rows, text)
-			}
-		}
-	}
-
-	rows = append(rows, "")
+// treeLines は左ペインの行を組む: スクロールするノード一覧の下に、実行中表示と直近の
+// イベント履歴を固定で置く。
+func (m *model) treeLines(h int) []string {
+	// 下部に置くフッター（空行 + 実行中 + イベント）を先に組み、残りをノード領域にする。
+	footer := []string{""}
 	if m.opRunning {
-		rows = append(rows, styNote.Render("実行中: "+m.opLabel+" …"))
+		footer = append(footer, styNote.Render("実行中: "+m.opLabel+" …"))
 	}
 	if len(m.events) > 0 {
-		rows = append(rows, styHelp.Render("── イベント ──"))
-		events := m.events
-		if len(events) > 8 {
-			events = events[len(events)-8:]
+		footer = append(footer, styHelp.Render("── イベント ──"))
+		ev := m.events
+		if len(ev) > 6 {
+			ev = ev[len(ev)-6:]
 		}
-		rows = append(rows, events...)
+		footer = append(footer, ev...)
 	}
-	return rows
+	if len(footer) > h {
+		footer = footer[:h]
+	}
+	nodeAreaH := max(1, h-len(footer))
+
+	var nodeLines []string
+	switch {
+	case m.treesErr != "":
+		nodeLines = []string{styErrNote.Render("取得失敗: " + m.treesErr)}
+	case m.trees == nil:
+		nodeLines = []string{"読み込み中…"}
+	case len(m.nodes) == 0:
+		nodeLines = []string{"worktree がありません（n で作成）"}
+	default:
+		nodeLines = make([]string, len(m.nodes))
+		for i, n := range m.nodes {
+			nodeLines[i] = m.nodeLine(i, n)
+		}
+	}
+
+	m.adjustTreeTop(len(nodeLines), nodeAreaH)
+	visible := nodeLines
+	if m.treeTop < len(visible) {
+		visible = visible[m.treeTop:]
+	} else {
+		visible = nil
+	}
+	if len(visible) > nodeAreaH {
+		visible = visible[:nodeAreaH]
+	}
+	for len(visible) < nodeAreaH {
+		visible = append(visible, "")
+	}
+	return append(visible, footer...)
 }
 
-// commonWarnings は各 Result 共通の警告（render.warnings と同じ語彙）。
-func (m *model) commonWarnings(legacyBackup string, unknownRepos []string) []string {
-	var rows []string
-	if legacyBackup != "" {
-		rows = append(rows, styNote.Render(
-			"旧形式の状態ファイルを "+legacyBackup+" へ退避しました。以前から稼働中のサーバーは手動で停止してください。"))
+// adjustTreeTop は sel が可視域（treeTop..treeTop+viewH）に入るようスクロール位置を
+// 詰める。ノード数が領域に満たなければ先頭に固定する。
+func (m *model) adjustTreeTop(total, viewH int) {
+	if m.sel < m.treeTop {
+		m.treeTop = m.sel
 	}
-	for _, repo := range unknownRepos {
-		rows = append(rows, styNote.Render(fmt.Sprintf("[%s] サーバー設定がありません（[servers.%s]）", repo, repo)))
+	if m.sel >= m.treeTop+viewH {
+		m.treeTop = m.sel - viewH + 1
 	}
-	return rows
+	m.treeTop = clamp(m.treeTop, 0, max(0, total-viewH))
+}
+
+// nodeLine は 1 ノードを描く。選択行は色付けを諦めてプレーン文字列を組んでから全体を
+// 反転する（マークの色との共存を避ける）。非選択のサーバーノードはマークを色付けする。
+func (m *model) nodeLine(i int, n node) string {
+	if n.isWorktree() {
+		text := "▾ " + n.wt
+		if n.alias != "" {
+			text += " (" + n.alias + ")"
+		}
+		if n.broken {
+			text += " (!)"
+		}
+		if i == m.sel {
+			return stySelected.Render(text)
+		}
+		return text
+	}
+
+	suffix := n.repo + "/" + n.server
+	if n.running && n.pid != 0 {
+		suffix += " :" + strconv.Itoa(n.pid)
+	}
+	if i == m.sel {
+		return stySelected.Render("  " + markGlyph(n) + " " + suffix)
+	}
+	return "  " + markColored(n) + " " + suffix
+}
+
+// markGlyph は無色のマーク記号（選択行用）。
+func markGlyph(n node) string {
+	switch {
+	case n.running:
+		return "●"
+	case n.crashed:
+		return "✗"
+	default:
+		return "○"
+	}
+}
+
+// markColored は色付きのマーク記号（非選択行用）。
+func markColored(n node) string {
+	switch {
+	case n.running:
+		return styMarkRunning.Render("●")
+	case n.crashed:
+		return styMarkCrashed.Render("✗")
+	default:
+		return styMarkStopped.Render("○")
+	}
+}
+
+// rightLines は右ペインの行を返す。作成先リポジトリの選択モーダル中はチェックリストを、
+// それ以外はビューポート（ログ／doctor 結果）を描く。
+func (m *model) rightLines() []string {
+	if m.prompt == promptCreateRepos {
+		return m.createReposLines()
+	}
+	return strings.Split(m.vp.View(), "\n")
+}
+
+// createReposLines は作成先リポジトリの選択モーダルを組む。
+func (m *model) createReposLines() []string {
+	lines := []string{
+		styFlag.Render("作成先リポジトリを選択（space 切替 / a 全て / Enter 実行 / Esc 中止）"),
+		"worktree 名: " + m.createName,
+		"",
+	}
+	if m.repos != nil {
+		for i, r := range m.repos.Repos {
+			box := "[ ]"
+			if i < len(m.repoChecked) && m.repoChecked[i] {
+				box = "[x]"
+			}
+			text := box + " " + r.Name
+			if i == m.repoSel {
+				text = stySelected.Render(text)
+			}
+			lines = append(lines, text)
+		}
+	}
+	return lines
+}
+
+// joinPanes は左右のペイン行を "│" で縦に結合し、行数を h に揃える。左カラムは幅 leftW
+// に固定（padDisplay は ANSI 対応のため色付き行でも幅が崩れない）。
+func joinPanes(left, right []string, leftW, h int) []string {
+	out := make([]string, h)
+	for i := 0; i < h; i++ {
+		l, r := "", ""
+		if i < len(left) {
+			l = left[i]
+		}
+		if i < len(right) {
+			r = right[i]
+		}
+		out[i] = padDisplay(l, leftW) + "│" + r
+	}
+	return out
+}
+
+// helpLine は文脈別のキーヘルプ。
+func (m *model) helpLine() string {
+	switch m.prompt {
+	case promptFilter:
+		return "入力でフィルタ  Enter 確定  Esc 解除"
+	case promptCreateName:
+		return "worktree 名を入力  Enter 次へ  Esc 中止"
+	case promptAlias:
+		return "別名を入力（空で削除）  Enter 確定  Esc 中止"
+	case promptCreateRepos:
+		return "j/k 選択  space 切替  a 全て  Enter 実行  Esc 中止"
+	case promptConfirmRemove:
+		return "y 削除実行  他キー 中止"
+	}
+	if m.doctorMode {
+		return "F --fix 実行  j/k スクロール  Esc 閉じる"
+	}
+	if m.focus == focusTree {
+		return "j/k 選択  Enter/s switch  r 再起動  x stop  n 作成  D 削除  a 別名  ! doctor  R 更新  Tab→ログ  q 終了"
+	}
+	return "j/k スクロール  f 追従  / フィルタ  p 前世代  w 折り返し  g/G  Tab→ツリー  q 終了"
 }
 
 // noteLine はフッターの一時メッセージ行。
@@ -239,48 +284,10 @@ func (m *model) noteLine() string {
 	return styNote.Render(m.note)
 }
 
-// helpLine は現在のビューのキーヘルプ。
-func (m *model) helpLine() string {
-	switch m.view {
-	case viewLogs:
-		return "←/→ 対象切替  f 追従  / フィルタ  p 前世代  w 折り返し  j/k/g/G スクロール  Esc 解除  Tab/1-3 ビュー  q 終了"
-	case viewStatus:
-		return "j/k 選択  Enter ログへ  Tab/1-3 ビュー  q 終了"
-	case viewTrees:
-		return "j/k 選択  Enter/s switch  r 再起動switch  x stop  l ログ  R 更新  Tab/1-3 ビュー  q 終了"
-	}
-	return ""
-}
-
-// fitHeight は本文の行数をちょうど h に揃える（不足は空行、超過は選択が見える範囲に
-// 収まらない末尾を切る）。フッターの位置を安定させるための調整である。
-func fitHeight(lines []string, h int) []string {
-	// 複数行のセル（ビューポートの View など）を行単位に展開する。
-	var flat []string
-	for _, l := range lines {
-		flat = append(flat, strings.Split(l, "\n")...)
-	}
-	if len(flat) > h {
-		flat = flat[:h]
-	}
-	for len(flat) < h {
-		flat = append(flat, "")
-	}
-	return flat
-}
-
 // truncLine は 1 行を表示幅 w に収める。
 func truncLine(s string, w int) string {
 	if w <= 0 {
 		return s
 	}
 	return truncDisplay(s, w)
-}
-
-// orDash は空文字列をテーブルのプレースホルダ "-" に写す。
-func orDash(s string) string {
-	if s == "" {
-		return "-"
-	}
-	return s
 }

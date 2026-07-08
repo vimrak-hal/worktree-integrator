@@ -127,10 +127,10 @@ func TestTailerInitialWindowSkipsLeadingFragment(t *testing.T) {
 
 func TestRingKeepsOnlyTail(t *testing.T) {
 	r := newRing(3)
-	r.push(line{text: "1"}, line{text: "2"})
-	r.push(line{text: "3"}, line{text: "4"}, line{text: "5"})
+	r.push("1", "2")
+	r.push("3", "4", "5")
 	got := r.slice()
-	if len(got) != 3 || got[0].text != "3" || got[2].text != "5" {
+	if len(got) != 3 || got[0] != "3" || got[2] != "5" {
 		t.Fatalf("ring = %+v", got)
 	}
 }

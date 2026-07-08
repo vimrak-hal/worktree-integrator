@@ -4,33 +4,56 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vimrak-hal/worktree-integrator/internal/app/server"
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/vimrak-hal/worktree-integrator/internal/app/tree"
 )
 
-// ステータスビューは resolve が運んだ行を（選択反転・状態ラベル込みで）描画する。
-func TestStatusViewShowsRows(t *testing.T) {
+// 2 ペインは 1 画面にツリーのノード名とログ行を "│" 区切りで同時に描く。
+func TestViewShowsBothPanes(t *testing.T) {
 	m := newTestModel(t)
-	msg := resolved()
-	msg.status = &server.StatusResult{Rows: []server.Row{{
-		Repo: "app", Server: "backend", Worktree: "feat-x", Pid: 31396, State: server.StateRunning,
-	}}}
-	m.applyResolved(msg)
-	m.Update(key("2"))
+	m.cfg = serverCfg()
+	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}}})
+	m.buildNodes()
+	m.curKey = "feat-a\x00api/backend"
+	m.bufs[m.curKey] = newRing(10)
+	m.bufs[m.curKey].push("hello-log-line")
+	m.rebuildLog()
+
 	view := m.View()
-	for _, want := range []string{"backend", "feat-x", "31396", "稼働中"} {
+	for _, want := range []string{"feat-a", "api/backend", "hello-log-line", "│"} {
 		if !strings.Contains(view, want) {
-			t.Errorf("status view missing %q", want)
+			t.Errorf("view missing %q", want)
 		}
 	}
 }
 
-func TestFitHeightPadsAndTrims(t *testing.T) {
-	got := fitHeight([]string{"a\nb", "c"}, 5)
-	if len(got) != 5 || got[0] != "a" || got[1] != "b" || got[2] != "c" || got[4] != "" {
-		t.Fatalf("fitHeight = %v", got)
+// padDisplay は色付き（ANSI エスケープを含む）文字列でも表示幅をちょうど w にする。
+func TestPadDisplayFixesWidth(t *testing.T) {
+	colored := styFlag.Render("api/backend")
+	got := padDisplay(colored, 30)
+	if w := lipgloss.Width(got); w != 30 {
+		t.Fatalf("padDisplay width = %d, want 30", w)
 	}
-	got = fitHeight([]string{"a", "b", "c"}, 2)
-	if len(got) != 2 || got[1] != "b" {
-		t.Fatalf("fitHeight trim = %v", got)
+	// 幅を超える入力は切り詰めて w に収める。
+	long := padDisplay(strings.Repeat("x", 100), 30)
+	if w := lipgloss.Width(long); w != 30 {
+		t.Fatalf("padDisplay truncated width = %d, want 30", w)
+	}
+}
+
+// doctorMode は右ペインに doctor の結果テキストを表示する。
+func TestDoctorModeShowsResult(t *testing.T) {
+	m := newTestModel(t)
+	m.doctorText = []string{"問題は見つかりませんでした"}
+	m.doctorMode = true
+	m.rebuildLog()
+
+	view := m.View()
+	if !strings.Contains(view, "問題は見つかりませんでした") {
+		t.Error("doctor 結果のテキストが表示されていない")
+	}
+	if !strings.Contains(view, "doctor 結果") {
+		t.Error("doctor 結果の見出しが表示されていない")
 	}
 }

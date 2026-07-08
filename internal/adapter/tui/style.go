@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"hash/fnv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -12,39 +11,25 @@ import (
 // スタイルは基本 16 色（ANSI）だけを使う。dev サーバーのログを見る端末は多様で
 // あり、256 色やトゥルーカラーを仮定しない。
 var (
-	styTabActive   = lipgloss.NewStyle().Bold(true).Reverse(true).Padding(0, 1)
-	styTabInactive = lipgloss.NewStyle().Faint(true).Padding(0, 1)
-	styFlag        = lipgloss.NewStyle().Foreground(lipgloss.Color("6")) // シアン
-	styHelp        = lipgloss.NewStyle().Faint(true)
-	styNote        = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // 黄
-	styErrNote     = lipgloss.NewStyle().Foreground(lipgloss.Color("1")) // 赤
-	stySelected    = lipgloss.NewStyle().Reverse(true)
-	styHeaderRow   = lipgloss.NewStyle().Bold(true).Underline(true)
+	styFlag     = lipgloss.NewStyle().Foreground(lipgloss.Color("6")) // シアン
+	styHelp     = lipgloss.NewStyle().Faint(true)
+	styNote     = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // 黄
+	styErrNote  = lipgloss.NewStyle().Foreground(lipgloss.Color("1")) // 赤
+	stySelected = lipgloss.NewStyle().Reverse(true)
 
 	styLineError = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	styLineWarn  = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 
-	styStateRunning = lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // 緑
-	styStateCrashed = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	styStateStopped = lipgloss.NewStyle().Faint(true)
+	// ツリーのサーバーノードの状態マーク。稼働=緑、クラッシュ=赤、停止=faint。
+	styMarkRunning = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	styMarkCrashed = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	styMarkStopped = lipgloss.NewStyle().Faint(true)
+
+	// ペインの見出し。フォーカス側は反転+太字、非フォーカス側は faint。どちらの
+	// ペインを操作しているかを一目で分かるようにする。
+	styPaneTitle      = lipgloss.NewStyle().Faint(true)
+	styPaneTitleFocus = lipgloss.NewStyle().Reverse(true).Bold(true)
 )
-
-// tagPalette はマージ表示で出所タグ（repo/server）に割り当てる色。タグ名のハッシュで
-// 決まるため、同じサーバーは常に同じ色になる。
-var tagPalette = []lipgloss.Style{
-	lipgloss.NewStyle().Foreground(lipgloss.Color("4")), // 青
-	lipgloss.NewStyle().Foreground(lipgloss.Color("2")), // 緑
-	lipgloss.NewStyle().Foreground(lipgloss.Color("5")), // マゼンタ
-	lipgloss.NewStyle().Foreground(lipgloss.Color("6")), // シアン
-	lipgloss.NewStyle().Foreground(lipgloss.Color("3")), // 黄
-}
-
-// tagStyle は tag に決定的な色を割り当てる。
-func tagStyle(tag string) lipgloss.Style {
-	h := fnv.New32a()
-	h.Write([]byte(tag))
-	return tagPalette[h.Sum32()%uint32(len(tagPalette))]
-}
 
 // colorizeLog はログの 1 行にレベル推定の色付けをする。構造化ログではないため
 // ヒューリスティック（単語の包含）であり、error / fatal / panic を赤、warn を黄に
@@ -78,4 +63,15 @@ func truncDisplay(s string, w int) string {
 // wrapDisplay は（色付けを含みうる）1 行を表示幅 w で折り返す。
 func wrapDisplay(s string, w int) string {
 	return ansi.Hardwrap(s, w, true)
+}
+
+// padDisplay は（色付けを含みうる）1 行を表示幅 w に「切り詰め + 右パディング」する。
+// 左ペインの色付き行を 2 ペイン結合の左カラムへ収める用途であり、truncDisplay と違い
+// 不足分を空白で埋めて幅を w に固定する（ANSI エスケープは幅 0 として扱う）。
+func padDisplay(s string, w int) string {
+	s = ansi.Truncate(s, w, "…")
+	if gap := w - lipgloss.Width(s); gap > 0 {
+		s += strings.Repeat(" ", gap)
+	}
+	return s
 }

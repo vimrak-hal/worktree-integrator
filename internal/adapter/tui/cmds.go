@@ -1,13 +1,16 @@
 package tui
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/vimrak-hal/worktree-integrator/internal/adapter/render"
 	"github.com/vimrak-hal/worktree-integrator/internal/app"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/server"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/tree"
@@ -35,14 +38,19 @@ type (
 	treesTickMsg   time.Time
 )
 
-// resolvedMsg は resolveCmd の結果: 再読み込み済みの設定と、ログ対象（パス解決
-// のみ・本文は tailer が読む）・サーバー状態。
+// resolvedMsg は resolveCmd の結果: 再読み込み済みの設定・全体のサーバー状態、および
+// 選択中サーバーノード 1 件のログパス解決。selKey は解決の対象だった key であり、
+// これが空なら path / missing は無意味（ステータスのみの更新）。selKey が現在の
+// curKey と一致するときだけモデルはログ対象を更新する（発行から到着までの間に選択が
+// 動いた古い結果を捨てるための照合）。
 type resolvedMsg struct {
-	cfg    *config.File
-	logs   *server.LogsResult
-	status *server.StatusResult
-	warn   string
-	err    error
+	cfg     *config.File
+	status  *server.StatusResult
+	selKey  string
+	path    string
+	missing bool
+	warn    string
+	err     error
 }
 
 // treesMsg は treesCmd の結果（worktree 一覧）。
@@ -51,15 +59,26 @@ type treesMsg struct {
 	err error
 }
 
-// serverEventMsg は switch / stop 実行中のライフサイクルイベント 1 件
-// （forwarder がワークフローの goroutine から送る）。
-type serverEventMsg struct{ line string }
+// reposMsg は reposCmd の結果（create の作成先リポジトリ候補）。
+type reposMsg struct {
+	res *app.ReposResult
+	err error
+}
 
-// opDoneMsg は switch / stop の完了。summary は日本語の 1 行サマリで、err が
-// 非 nil でも部分的な成功を含みうる（ワークフローの規約どおり）。
+// eventMsg はイベント履歴の 1 行。サーバーのライフサイクルイベントと worktree 作成の
+// 進捗（fetch / 作成 / 型付き Note）の両方がこの 1 経路で流れる。ワークフローは
+// Update の外（tea.Cmd の goroutine）で走るため、forwarder がモデルを直接触らず
+// p.Send で正規のメッセージ経路に乗せる。
+type eventMsg struct{ line string }
+
+// opDoneMsg は統合操作（switch / stop / create / remove / alias / doctor）の完了。
+// summary は日本語の 1 行サマリで、err が非 nil でも部分的な成功を含みうる。
+// doctorText は doctor 実行時のみ非 nil で、結果ペインへ表示するために描画済みの
+// テキストを行分割して運ぶ（モデル側で render を呼ばずに済ませる）。
 type opDoneMsg struct {
-	summary string
-	err     error
+	summary    string
+	err        error
+	doctorText []string
 }
 
 func tailTick() tea.Cmd {
@@ -75,19 +94,60 @@ func treesTick() tea.Cmd {
 }
 
 // forwarder はワークフローのライブイベントを Bubble Tea プログラムへ転送する
-// app.Progress の実装。ワークフローは Update の外（tea.Cmd の goroutine）で走るため、
-// モデルを直接触らず p.Send で正規のメッセージ経路に乗せる。p は Run が
-// tea.NewProgram の直後（ユーザー操作が始まる前）に設定する。
+// app.Progress の実装。p は Run が tea.NewProgram の直後（ユーザー操作が始まる前）に
+// 設定する。作成進捗（Update / Event）とサーバーイベント（ServerEvent）のいずれも
+// 短い日本語 1 行に整形して eventMsg で送る。
 type forwarder struct{ p *tea.Program }
 
-// Update / Event は worktree 作成の進捗（TUI からは実行しないため未使用）。
-func (f *forwarder) Update(string, worktree.Progress) {}
-func (f *forwarder) Event(string, worktree.Note)      {}
+// Update は worktree 作成の進捗遷移（fetch 中 / 作成中）を転送する。
+func (f *forwarder) Update(repo string, state worktree.Progress) {
+	if f.p != nil {
+		f.p.Send(eventMsg{line: fmt.Sprintf("[%s] %s", repo, progressLabel(state))})
+	}
+}
+
+// Event は worktree 作成の型付き途中経過イベントを転送する。
+func (f *forwarder) Event(repo string, n worktree.Note) {
+	if f.p != nil {
+		f.p.Send(eventMsg{line: fmt.Sprintf("[%s] %s", repo, noteLine(n))})
+	}
+}
 
 // ServerEvent はサーバーのライフサイクルイベントを転送する。
 func (f *forwarder) ServerEvent(repo, srv string, ev coreserver.Event) {
 	if f.p != nil {
-		f.p.Send(serverEventMsg{line: eventLine(repo+"/"+srv, ev)})
+		f.p.Send(eventMsg{line: eventLine(repo+"/"+srv, ev)})
+	}
+}
+
+// progressLabel は worktree の進捗状態を短い日本語ラベルへ変換する（render の
+// 同名関数と同じ語彙。unexported なため同内容を持つ）。封印された列挙のため、未知の
+// 値はバグでありパニックさせる。
+func progressLabel(state worktree.Progress) string {
+	switch state {
+	case worktree.ProgressFetching:
+		return "fetch中"
+	case worktree.ProgressCreating:
+		return "作成中"
+	default:
+		panic(fmt.Sprintf("unknown worktree.Progress %d", state))
+	}
+}
+
+// noteLine は型付き途中経過イベントを短い日本語 1 行へ変換する（render の同名関数と
+// 同じ語彙）。NoteKind は封印された列挙のため、未知の値はバグでありパニックさせる。
+func noteLine(n worktree.Note) string {
+	switch n.Kind {
+	case worktree.NoteCopyRejected:
+		return fmt.Sprintf("コピー対象をスキップ（不正なパス）: %s", n.Path)
+	case worktree.NoteCopyFailed:
+		return fmt.Sprintf("コピー失敗 %s: %v", n.Path, n.Err)
+	case worktree.NoteGitignoreListFailed:
+		return fmt.Sprintf("gitignore の列挙に失敗（自動コピーをスキップ）: %v", n.Err)
+	case worktree.NoteFetchDegraded:
+		return fmt.Sprintf("fetch に失敗したため、既存の追跡ブランチから作成します: %v", n.Err)
+	default:
+		panic(fmt.Sprintf("unknown worktree.NoteKind %d", n.Kind))
 	}
 }
 
@@ -136,24 +196,13 @@ func serverCommand(cfg *config.File) (action.ServerCommand, error) {
 	return action.NewServerCommand(action.Overrides{}, cfg, os.Getenv, nil)
 }
 
-// logsScope は現在の worktree 絞り込みを action の語彙へ写す。
-func logsScope(scope string) (action.WorktreeScope, error) {
-	if scope == "" {
-		return action.AllWorktrees{}, nil
-	}
-	name, err := action.ParseName(scope)
-	if err != nil {
-		return nil, err
-	}
-	return action.OneWorktree{Name: name}, nil
-}
-
-// resolveCmd は設定を読み直し、ログ対象のパス（Lines: 0 = パス解決のみ）とサーバー
-// 状態を取り直すコマンドを返す。この定期的な再解決が「表示の正」であり、MCP の
-// エージェントや別の CLI が switch してもログ表示は自動で新しい対象へ追従する。
+// resolveCmd は設定を読み直し、全体のサーバー状態と、選択中サーバーノードのログパス
+// （Lines: 0 = パス解決のみ）を取り直すコマンドを返す。この定期的な再解決が「表示の
+// 正」であり、MCP のエージェントや別の CLI が switch してもログ表示は自動で新しい
+// 対象へ追従する。
 func (m *model) resolveCmd() tea.Cmd {
 	ctx, root, fw := m.ctx, m.root, m.fw
-	lastCfg, scope, prev := m.cfg, m.scope, m.prev
+	lastCfg, prev, curKey := m.cfg, m.prev, m.curKey
 	return func() tea.Msg {
 		warn := ""
 		cfg, err := config.Load()
@@ -165,20 +214,38 @@ func (m *model) resolveCmd() tea.Cmd {
 		if err != nil {
 			return resolvedMsg{err: err}
 		}
-		sc, err := logsScope(scope)
-		if err != nil {
-			return resolvedMsg{err: err}
-		}
 		a := buildApp(cfg, root, fw)
-		logs, err := a.ServerLogs(ctx, cmd, action.LogsKind{Scope: sc, Lines: 0, Prev: prev})
-		if err != nil {
-			return resolvedMsg{err: err}
-		}
 		status, err := a.ServerStatus(ctx, cmd)
 		if err != nil {
 			return resolvedMsg{err: err}
 		}
-		return resolvedMsg{cfg: cfg, logs: logs, status: status, warn: warn}
+		msg := resolvedMsg{cfg: cfg, status: status, warn: warn, selKey: curKey}
+		if curKey == "" {
+			return msg
+		}
+		wt, repo, srv, ok := splitKey(curKey)
+		if !ok {
+			// key が壊れている場合はステータスのみを返す（パスは触らない）。
+			return msg
+		}
+		name, err := action.ParseName(wt)
+		if err != nil {
+			return resolvedMsg{err: err}
+		}
+		logs, err := a.ServerLogs(ctx, cmd, action.LogsKind{Scope: action.OneWorktree{Name: name}, Lines: 0, Prev: prev})
+		if err != nil {
+			return resolvedMsg{err: err}
+		}
+		// 該当 (repo, server) のエントリを探す。見つからなければ「まだ無い」扱い。
+		msg.missing = true
+		for _, e := range logs.Logs {
+			if e.Repo == repo && e.Server == srv {
+				msg.path = e.Path
+				msg.missing = e.Missing
+				break
+			}
+		}
+		return msg
 	}
 }
 
@@ -188,6 +255,16 @@ func (m *model) treesCmd() tea.Cmd {
 	return func() tea.Msg {
 		res, err := buildApp(cfg, root, fw).List(ctx)
 		return treesMsg{res: res, err: err}
+	}
+}
+
+// reposCmd は create の作成先候補（repos_dir 直下のリポジトリ）を取り直すコマンドを
+// 返す。
+func (m *model) reposCmd() tea.Cmd {
+	ctx, root, fw, cfg := m.ctx, m.root, m.fw, m.cfg
+	return func() tea.Msg {
+		res, err := buildApp(cfg, root, fw).ListRepos(ctx)
+		return reposMsg{res: res, err: err}
 	}
 }
 
@@ -233,5 +310,91 @@ func (m *model) stopCmd(name string) tea.Cmd {
 			summary = fmt.Sprintf("stop %s: %d 停止, %d 失敗", name, res.Stopped, res.Failed)
 		}
 		return opDoneMsg{summary: summary, err: err}
+	}
+}
+
+// createCmd は worktree 作成を実行するコマンドを返す。名前は入力済みの確定値、repos は
+// モーダルで選択されたリポジトリ名。非対話（Selector: nil）のため、対象は明示された
+// repos で決まる。
+func (m *model) createCmd(name string, repos []string) tea.Cmd {
+	ctx, root, fw, cfg := m.ctx, m.root, m.fw, m.cfg
+	return func() tea.Msg {
+		act, err := action.NewCreate(name, repos, false, "", action.Overrides{}, cfg, os.Getenv)
+		if err != nil {
+			return opDoneMsg{summary: "create を開始できません", err: err}
+		}
+		res, err := buildApp(cfg, root, fw).Create(ctx, act)
+		summary := fmt.Sprintf("create %s: 対象なし", name)
+		if res != nil {
+			summary = fmt.Sprintf("create %s: %d 作成, %d スキップ, %d 失敗",
+				name, res.Created, res.Skipped, res.Failed)
+		}
+		return opDoneMsg{summary: summary, err: err}
+	}
+}
+
+// removeCmd は worktree 削除を実行するコマンドを返す。TUI からは常に非 --force で
+// 実行し、dirty で git が拒否した場合は CLI の強制削除へ誘導する（LLM も TUI も
+// dirty の強制削除は明示コマンド経由に限る）。
+func (m *model) removeCmd(name string) tea.Cmd {
+	ctx, root, fw, cfg := m.ctx, m.root, m.fw, m.cfg
+	return func() tea.Msg {
+		parsed, err := action.ParseName(name)
+		if err != nil {
+			return opDoneMsg{summary: "remove を開始できません", err: err}
+		}
+		_, err = buildApp(cfg, root, fw).Remove(ctx, action.Remove{Name: parsed, Force: false, KeepBranch: false})
+		if err != nil {
+			return opDoneMsg{
+				summary: fmt.Sprintf("remove %s: 失敗（強制削除は CLI: wt remove --force %s）", name, name),
+				err:     err,
+			}
+		}
+		return opDoneMsg{summary: fmt.Sprintf("remove %s: 完了", name)}
+	}
+}
+
+// aliasCmd は worktree の表示用別名を設定・削除するコマンドを返す。label が空なら
+// 削除、非空なら設定（正規化後に保存された値を summary に載せる）。
+func (m *model) aliasCmd(name, label string) tea.Cmd {
+	ctx, root, fw, cfg := m.ctx, m.root, m.fw, m.cfg
+	return func() tea.Msg {
+		parsed, err := action.ParseName(name)
+		if err != nil {
+			return opDoneMsg{summary: "別名の変更を開始できません", err: err}
+		}
+		a := buildApp(cfg, root, fw)
+		if label == "" {
+			if _, err := a.AliasRemove(ctx, parsed); err != nil {
+				return opDoneMsg{summary: "別名を削除できません", err: err}
+			}
+			return opDoneMsg{summary: "別名を削除: " + name}
+		}
+		stored, err := a.AliasSet(ctx, parsed, label)
+		if err != nil {
+			return opDoneMsg{summary: "別名を設定できません", err: err}
+		}
+		return opDoneMsg{summary: fmt.Sprintf("別名を設定: %s → %s", name, stored)}
+	}
+}
+
+// doctorCmd は自己診断（--fix なら修復も）を実行し、結果を render.Doctor で描画した
+// テキストとともに返すコマンドを返す。結果ペインへの表示はモデルではなくここで
+// バッファへ描画してから運ぶ（表示層の語彙を 1 箇所に保つ）。
+func (m *model) doctorCmd(fix bool) tea.Cmd {
+	ctx, root, fw, cfg := m.ctx, m.root, m.fw, m.cfg
+	return func() tea.Msg {
+		res, err := buildApp(cfg, root, fw).Doctor(ctx, fix)
+		summary := "doctor 完了"
+		if fix {
+			summary = "doctor --fix 完了"
+		}
+		var text []string
+		if res != nil {
+			var buf bytes.Buffer
+			render.Doctor(&buf, res)
+			text = strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+		}
+		return opDoneMsg{summary: summary, doctorText: text, err: err}
 	}
 }
