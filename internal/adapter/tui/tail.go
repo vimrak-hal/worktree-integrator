@@ -104,18 +104,11 @@ func (t *tailer) poll() ([]string, error) {
 	return lines, nil
 }
 
-// line はリングバッファの 1 行。tag はマージ表示（全サーバー）での出所
-// （"repo/server"）で、単一サーバーのバッファでは空である。
-type line struct {
-	tag  string
-	text string
-}
-
 // ring は末尾 cap 行だけを保持する行バッファ。ログは無限に伸びるため、TUI が保持
 // する範囲に上限を設ける。
 type ring struct {
 	cap   int
-	lines []line
+	lines []string
 }
 
 func newRing(cap int) *ring {
@@ -123,17 +116,17 @@ func newRing(cap int) *ring {
 }
 
 // push は行を追記し、cap を超えた古い行を捨てる。
-func (r *ring) push(ls ...line) {
+func (r *ring) push(ls ...string) {
 	r.lines = append(r.lines, ls...)
 	if len(r.lines) > r.cap {
 		// 先頭を切り落とすだけだと下層配列が伸び続けるため、詰め直して解放する。
-		trimmed := make([]line, r.cap)
+		trimmed := make([]string, r.cap)
 		copy(trimmed, r.lines[len(r.lines)-r.cap:])
 		r.lines = trimmed
 	}
 }
 
 // slice は保持中の行を古い順に返す（呼び出し側は変更しないこと）。
-func (r *ring) slice() []line {
+func (r *ring) slice() []string {
 	return r.lines
 }
