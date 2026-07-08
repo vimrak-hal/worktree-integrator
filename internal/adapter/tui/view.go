@@ -7,8 +7,9 @@ import (
 )
 
 // View は現在のモデルを 1 画面に描画する。レイアウトは lazygit 風の 2 ペイン: 固定 3 行の
-// クローム（ペインタイトル行・note 行・ヘルプ行）と、その間の本文（左=ツリー、右=ログ）を
-// "│" で縦に区切る。本文の高さはビューポートと同じ height-3 に揃える。
+// クローム（ペインタイトル行・note 行・ヘルプ行）と、その間の本文（左=ツリー、右=ログ／
+// doctor 結果／作成モーダル）を "│" で縦に区切る。本文の高さはビューポートと同じ
+// height-3 に揃える。
 func (m *model) View() string {
 	if !m.ready {
 		return "起動中…"
@@ -51,8 +52,11 @@ func (m *model) paneTitle(label string, f focusID) string {
 }
 
 // logTitle は右ペインの見出し: 対象（repo/server @ worktree）と、モードのフラグ
-// （追従・前世代・フィルタ／入力中の input.View()）。
+// （追従・前世代・フィルタ／入力中の input.View()）。doctor 結果表示中は専用の見出し。
 func (m *model) logTitle() string {
+	if m.doctorMode {
+		return m.paneTitle(" doctor 結果 ", focusLog)
+	}
 	label := " ログ "
 	if m.curKey != "" {
 		if wt, repo, srv, ok := splitKey(m.curKey); ok {
@@ -110,7 +114,7 @@ func (m *model) treeLines(h int) []string {
 	case m.trees == nil:
 		nodeLines = []string{"読み込み中…"}
 	case len(m.nodes) == 0:
-		nodeLines = []string{"worktree がありません"}
+		nodeLines = []string{"worktree がありません（n で作成）"}
 	default:
 		nodeLines = make([]string, len(m.nodes))
 		for i, n := range m.nodes {
@@ -197,9 +201,36 @@ func markColored(n node) string {
 	}
 }
 
-// rightLines は右ペインの行を返す（ビューポートのログ表示）。
+// rightLines は右ペインの行を返す。作成先リポジトリの選択モーダル中はチェックリストを、
+// それ以外はビューポート（ログ／doctor 結果）を描く。
 func (m *model) rightLines() []string {
+	if m.prompt == promptCreateRepos {
+		return m.createReposLines()
+	}
 	return strings.Split(m.vp.View(), "\n")
+}
+
+// createReposLines は作成先リポジトリの選択モーダルを組む。
+func (m *model) createReposLines() []string {
+	lines := []string{
+		styFlag.Render("作成先リポジトリを選択（space 切替 / a 全て / Enter 実行 / Esc 中止）"),
+		"worktree 名: " + m.createName,
+		"",
+	}
+	if m.repos != nil {
+		for i, r := range m.repos.Repos {
+			box := "[ ]"
+			if i < len(m.repoChecked) && m.repoChecked[i] {
+				box = "[x]"
+			}
+			text := box + " " + r.Name
+			if i == m.repoSel {
+				text = stySelected.Render(text)
+			}
+			lines = append(lines, text)
+		}
+	}
+	return lines
 }
 
 // joinPanes は左右のペイン行を "│" で縦に結合し、行数を h に揃える。左カラムは幅 leftW
@@ -224,9 +255,22 @@ func (m *model) helpLine() string {
 	switch m.prompt {
 	case promptFilter:
 		return "入力でフィルタ  Enter 確定  Esc 解除"
+	case promptCreateName:
+		return "worktree 名を入力  Enter 次へ  Esc 中止"
+	case promptAlias:
+		return "別名を入力（空で削除）  Enter 確定  Esc 中止"
+	case promptCreateRepos:
+		return "j/k 選択  space 切替  a 全て  Enter 実行  Esc 中止"
+	case promptConfirmRemove:
+		// 破壊的操作の確認は対象を明示する（どの worktree に y するのかを
+		// 押す瞬間に画面が示す）。
+		return fmt.Sprintf("worktree %q を削除しますか？  y 実行  他キー 中止", m.promptTarget)
+	}
+	if m.doctorMode {
+		return "F --fix 実行  j/k スクロール  Esc 閉じる"
 	}
 	if m.focus == focusTree {
-		return "j/k 選択  Enter/s switch  r 再起動  x stop  R 更新  Tab→ログ  q 終了"
+		return "j/k 選択  Enter/s switch  r 再起動  x stop  n 作成  D 削除  a 別名  ! doctor  R 更新  Tab→ログ  q 終了"
 	}
 	return "j/k スクロール  f 追従  / フィルタ  p 前世代  w 折り返し  g/G  Tab→ツリー  q 終了"
 }

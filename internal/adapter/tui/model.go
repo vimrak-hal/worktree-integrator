@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/vimrak-hal/worktree-integrator/internal/app"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/server"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/tree"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/config"
@@ -32,6 +33,10 @@ type promptMode int
 const (
 	promptNone promptMode = iota
 	promptFilter
+	promptCreateName
+	promptCreateRepos
+	promptAlias
+	promptConfirmRemove
 )
 
 // バッファの保持行数と描画上限。単一サーバーのログだけを表示するため、マージ用の
@@ -134,15 +139,26 @@ type model struct {
 	filtering bool
 	input     textinput.Model
 
-	// --- モーダル ---
-	prompt promptMode
+	// --- モーダル・結果ペイン ---
+	prompt     promptMode
+	createName string
+	// promptTarget は alias / remove プロンプトの対象 worktree 名（プロンプトを
+	// 開いた時点のカーソル位置を固定して保持する）。
+	promptTarget string
+	repos        *app.ReposResult
+	repoChecked  []bool
+	repoSel      int
+	// doctorText / doctorMode は doctor 結果の右ペイン表示。doctorMode 中は vp の
+	// 内容が doctorText になる（rebuildLog が出し分ける）。
+	doctorText []string
+	doctorMode bool
 
 	// opRunning 中は新しい統合操作を受け付けない（1 つずつ実行する）。
 	opRunning bool
 	opLabel   string
 	// quitAfterOp は操作中に終了要求があったことを表す（完了を待って終了する）。
 	quitAfterOp bool
-	// events はライフサイクルのイベント履歴（新しい順に表示）。
+	// events はライフサイクル・作成進捗のイベント履歴（新しい順に表示）。
 	events []string
 
 	// note はフッターの一時メッセージ（直近の操作結果・警告）。
@@ -223,6 +239,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rebuildLog()
 		return m, nil
 
+	case reposMsg:
+		if msg.err != nil {
+			m.note, m.noteErr = "リポジトリ一覧の取得に失敗: "+msg.err.Error(), true
+			m.prompt = promptNone
+			return m, nil
+		}
+		m.repos = msg.res
+		m.repoChecked = make([]bool, len(msg.res.Repos))
+		for i := range m.repoChecked {
+			m.repoChecked[i] = true
+		}
+		m.repoSel = 0
+		m.prompt = promptCreateRepos
+		return m, nil
+
 	case eventMsg:
 		m.events = append(m.events, msg.line)
 		if len(m.events) > 100 {
@@ -237,10 +268,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.note = msg.summary + "（" + msg.err.Error() + "）"
 		}
+		if len(msg.doctorText) > 0 {
+			m.doctorText = msg.doctorText
+			m.doctorMode = true
+			m.rebuildLog()
+		}
 		if m.quitAfterOp {
 			return m, tea.Quit
 		}
-		// 切り替え・停止で状態・一覧・ログパスが変わったはずなので、即座に再解決する。
+		// 切り替え・停止・作成・削除で状態・一覧・ログパスが変わったはずなので、
+		// 即座に再解決する。
 		return m, tea.Batch(m.resolveCmd(), m.treesCmd())
 
 	case tea.MouseMsg:
@@ -258,8 +295,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateKey はキー入力をさばく。モーダル（プロンプト）を最優先で処理し、その後に
-// グローバル・ペイン別のキーへ落とす。
+// updateKey はキー入力をさばく。モーダル（プロンプト）と結果ペイン（doctor）を
+// 最優先で処理し、その後にグローバル・ペイン別のキーへ落とす。
 func (m *model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyCtrlC {
 		return m, tea.Quit
@@ -268,6 +305,18 @@ func (m *model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.prompt {
 	case promptFilter:
 		return m.updateFilterKey(msg)
+	case promptCreateName:
+		return m.updateCreateNameKey(msg)
+	case promptAlias:
+		return m.updateAliasKey(msg)
+	case promptCreateRepos:
+		return m.updateCreateReposKey(msg)
+	case promptConfirmRemove:
+		return m.updateConfirmRemoveKey(msg)
+	}
+
+	if m.doctorMode {
+		return m.updateDoctorKey(msg)
 	}
 
 	switch msg.String() {
@@ -282,6 +331,8 @@ func (m *model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "tab", "left", "right", "h", "l":
 		m.toggleFocus()
 		return m, nil
+	case "!":
+		return m.startOp("doctor", m.doctorCmd(false))
 	}
 
 	if m.focus == focusTree {
@@ -335,6 +386,136 @@ func (m *model) updateFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// updateCreateNameKey は worktree 名の入力。Enter で確定して作成先リポジトリの
+// 選択モーダルへ進む（reposCmd）。
+func (m *model) updateCreateNameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEnter:
+		name := strings.TrimSpace(m.input.Value())
+		if name == "" {
+			m.note, m.noteErr = "worktree 名を入力してください", true
+			return m, nil
+		}
+		m.createName = name
+		m.prompt = promptNone
+		m.input.Blur()
+		return m, m.reposCmd()
+	case tea.KeyEscape:
+		m.prompt = promptNone
+		m.input.Blur()
+		return m, nil
+	default:
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
+	}
+}
+
+// updateAliasKey は別名の入力。Enter で確定（空なら削除）、Esc で中止。
+func (m *model) updateAliasKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEnter:
+		label := strings.TrimSpace(m.input.Value())
+		name := m.promptTarget
+		m.prompt = promptNone
+		m.input.Blur()
+		return m.startOp("alias "+name, m.aliasCmd(name, label))
+	case tea.KeyEscape:
+		m.prompt = promptNone
+		m.input.Blur()
+		return m, nil
+	default:
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
+	}
+}
+
+// updateCreateReposKey は作成先リポジトリの選択モーダル。
+func (m *model) updateCreateReposKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	n := 0
+	if m.repos != nil {
+		n = len(m.repos.Repos)
+	}
+	switch msg.String() {
+	case "j", "down":
+		if m.repoSel < n-1 {
+			m.repoSel++
+		}
+	case "k", "up":
+		if m.repoSel > 0 {
+			m.repoSel--
+		}
+	case " ":
+		if m.repoSel >= 0 && m.repoSel < len(m.repoChecked) {
+			m.repoChecked[m.repoSel] = !m.repoChecked[m.repoSel]
+		}
+	case "a":
+		// 全選択 / 全解除のトグル（1 つでも未選択なら全選択、そうでなければ全解除）。
+		all := true
+		for _, c := range m.repoChecked {
+			if !c {
+				all = false
+				break
+			}
+		}
+		for i := range m.repoChecked {
+			m.repoChecked[i] = !all
+		}
+	case "enter":
+		var repos []string
+		for i, c := range m.repoChecked {
+			if c {
+				repos = append(repos, m.repos.Repos[i].Name)
+			}
+		}
+		if len(repos) == 0 {
+			m.note, m.noteErr = "リポジトリを 1 つ以上選択してください", true
+			return m, nil
+		}
+		m.prompt = promptNone
+		return m.startOp("create "+m.createName, m.createCmd(m.createName, repos))
+	case "esc":
+		m.prompt = promptNone
+	}
+	return m, nil
+}
+
+// updateConfirmRemoveKey は削除の確認。y のみ実行、それ以外は中止。
+func (m *model) updateConfirmRemoveKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "y" {
+		m.prompt = promptNone
+		return m.startOp("remove "+m.promptTarget, m.removeCmd(m.promptTarget))
+	}
+	m.prompt = promptNone
+	return m, nil
+}
+
+// updateDoctorKey は doctor 結果ペイン中のキー操作。q は終了ではなく結果を閉じる。
+func (m *model) updateDoctorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q":
+		m.doctorMode = false
+		m.doctorText = nil
+		m.rebuildLog()
+	case "F":
+		return m.startOp("doctor", m.doctorCmd(true))
+	case "j", "down":
+		m.vp.ScrollDown(1)
+	case "k", "up":
+		m.vp.ScrollUp(1)
+	case "d":
+		m.vp.HalfPageDown()
+	case "u":
+		m.vp.HalfPageUp()
+	case "g":
+		m.vp.GotoTop()
+	case "G":
+		m.vp.GotoBottom()
+	}
+	return m, nil
+}
+
 // updateTreeKey は左ペイン（ツリー）にフォーカスがあるときのキー操作。
 func (m *model) updateTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
@@ -356,6 +537,27 @@ func (m *model) updateTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "R":
 		return m, m.treesCmd()
+	case "n":
+		m.prompt = promptCreateName
+		m.input.Prompt = "名前: "
+		m.input.Placeholder = "worktree 名"
+		m.input.SetValue("")
+		m.input.Focus()
+	case "D":
+		if wt, ok := m.selectedWorktree(); ok {
+			m.promptTarget = wt
+			m.prompt = promptConfirmRemove
+		}
+	case "a":
+		if wt, ok := m.selectedWorktree(); ok {
+			m.promptTarget = wt
+			m.prompt = promptAlias
+			m.input.Prompt = "別名: "
+			m.input.Placeholder = "表示用の別名（空で削除）"
+			m.input.SetValue(m.selectedAlias())
+			m.input.CursorEnd()
+			m.input.Focus()
+		}
 	}
 	return m, nil
 }
@@ -435,6 +637,21 @@ func (m *model) selectedWorktree() (string, bool) {
 		return "", false
 	}
 	return m.nodes[m.sel].wt, true
+}
+
+// selectedAlias はカーソル位置の worktree の現在の別名を返す（alias プロンプトの
+// プリフィル用）。
+func (m *model) selectedAlias() string {
+	wt, ok := m.selectedWorktree()
+	if !ok {
+		return ""
+	}
+	for _, n := range m.nodes {
+		if n.isWorktree() && n.wt == wt {
+			return n.alias
+		}
+	}
+	return ""
 }
 
 // buildNodes は trees・設定のサーバー定義・status から nodes を再構築する。各 worktree
@@ -630,9 +847,22 @@ func (m *model) pollTail() bool {
 	return true
 }
 
-// rebuildLog は現在の選択・フィルタからビューポートの内容を組み立て直す。
+// rebuildLog は現在の選択・フィルタ（または doctor 結果）からビューポートの内容を
+// 組み立て直す。
 func (m *model) rebuildLog() {
 	if !m.ready {
+		return
+	}
+	if m.doctorMode {
+		lines := m.doctorText
+		if m.wrap {
+			wrapped := make([]string, len(lines))
+			for i, l := range lines {
+				wrapped[i] = wrapDisplay(l, m.vp.Width)
+			}
+			lines = wrapped
+		}
+		m.vp.SetContent(strings.Join(lines, "\n"))
 		return
 	}
 	if m.curKey == "" {

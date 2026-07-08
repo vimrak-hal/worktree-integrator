@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/vimrak-hal/worktree-integrator/internal/app"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/server"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/tree"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/config"
@@ -192,5 +193,67 @@ func TestQuitWaitsForRunningOperation(t *testing.T) {
 	}
 	if msg := cmd(); msg != tea.Quit() {
 		t.Fatalf("expected tea.Quit, got %#v", msg)
+	}
+}
+
+// n → 名前入力 → reposMsg 受信で作成先モーダルになり、Enter で createCmd が発行される。
+func TestCreateFlowReachesReposModal(t *testing.T) {
+	m := newTestModel(t)
+	m.Update(key("n"))
+	if m.prompt != promptCreateName {
+		t.Fatalf("n must open the name prompt, got %d", m.prompt)
+	}
+	m.input.SetValue("feat-x")
+	m.Update(key("enter")) // 名前確定 → reposCmd
+
+	m.Update(reposMsg{res: &app.ReposResult{Repos: []app.RepoInfo{{Name: "api"}, {Name: "web"}}}})
+	if m.prompt != promptCreateRepos {
+		t.Fatalf("reposMsg must open the repos modal, got %d", m.prompt)
+	}
+	if len(m.repoChecked) != 2 || !m.repoChecked[0] || !m.repoChecked[1] {
+		t.Fatalf("repos must default to all-checked, got %v", m.repoChecked)
+	}
+	m.Update(key(" ")) // 1 件目を解除
+	if m.repoChecked[0] {
+		t.Fatal("space must toggle the selected repo off")
+	}
+	_, cmd := m.Update(key("enter"))
+	if cmd == nil {
+		t.Fatal("Enter with a selection must return a create command")
+	}
+	if !m.opRunning {
+		t.Fatal("create must mark an operation as running")
+	}
+}
+
+// D → y で削除コマンドが発行される。
+func TestRemoveConfirmFlow(t *testing.T) {
+	m := newTestModel(t)
+	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a"})
+	m.buildNodes()
+	m.Update(key("D"))
+	if m.prompt != promptConfirmRemove || m.promptTarget != "feat-a" {
+		t.Fatalf("D must arm remove confirm for feat-a, got prompt=%d target=%q", m.prompt, m.promptTarget)
+	}
+	_, cmd := m.Update(key("y"))
+	if cmd == nil {
+		t.Fatal("y must return a remove command")
+	}
+	if !m.opRunning {
+		t.Fatal("remove must mark an operation as running")
+	}
+}
+
+// a は選択 worktree の現在の別名を入力欄にプリフィルする。
+func TestAliasPrefill(t *testing.T) {
+	m := newTestModel(t)
+	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Alias: "ログイン画面"})
+	m.buildNodes()
+	m.Update(key("a"))
+	if m.prompt != promptAlias {
+		t.Fatalf("a must open the alias prompt, got %d", m.prompt)
+	}
+	if got := m.input.Value(); got != "ログイン画面" {
+		t.Fatalf("alias prompt must prefill the current alias, got %q", got)
 	}
 }

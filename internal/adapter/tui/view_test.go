@@ -41,3 +41,19 @@ func TestPadDisplayFixesWidth(t *testing.T) {
 		t.Fatalf("padDisplay truncated width = %d, want 30", w)
 	}
 }
+
+// doctorMode は右ペインに doctor の結果テキストを表示する。
+func TestDoctorModeShowsResult(t *testing.T) {
+	m := newTestModel(t)
+	m.doctorText = []string{"問題は見つかりませんでした"}
+	m.doctorMode = true
+	m.rebuildLog()
+
+	view := m.View()
+	if !strings.Contains(view, "問題は見つかりませんでした") {
+		t.Error("doctor 結果のテキストが表示されていない")
+	}
+	if !strings.Contains(view, "doctor 結果") {
+		t.Error("doctor 結果の見出しが表示されていない")
+	}
+}
