@@ -32,7 +32,9 @@ func (m *model) View() string {
 	b.WriteString("\n")
 	b.WriteString(truncLine(m.noteLine(), m.width))
 	b.WriteString("\n")
-	b.WriteString(truncLine(styHelp.Render(m.helpLine()), m.width))
+	// ヘルプ行は文脈別の Binding 列を help.Model が描く（スタイルは newHelp で
+	// styHelp 相当の faint・2 スペース区切りに揃えてある）。
+	b.WriteString(truncLine(m.help.ShortHelpView(m.contextBindings()), m.width))
 	return b.String()
 }
 
@@ -248,31 +250,6 @@ func joinPanes(left, right []string, leftW, h int) []string {
 		out[i] = padDisplay(l, leftW) + "│" + r
 	}
 	return out
-}
-
-// helpLine は文脈別のキーヘルプ。
-func (m *model) helpLine() string {
-	switch m.prompt {
-	case promptFilter:
-		return "入力でフィルタ  Enter 確定  Esc 解除"
-	case promptCreateName:
-		return "worktree 名を入力  Enter 次へ  Esc 中止"
-	case promptAlias:
-		return "別名を入力（空で削除）  Enter 確定  Esc 中止"
-	case promptCreateRepos:
-		return "j/k 選択  space 切替  a 全て  Enter 実行  Esc 中止"
-	case promptConfirmRemove:
-		// 破壊的操作の確認は対象を明示する（どの worktree に y するのかを
-		// 押す瞬間に画面が示す）。
-		return fmt.Sprintf("worktree %q を削除しますか？  y 実行  他キー 中止", m.promptTarget)
-	}
-	if m.doctorMode {
-		return "F --fix 実行  j/k スクロール  Esc 閉じる"
-	}
-	if m.focus == focusTree {
-		return "j/k 選択  Enter/s switch  r 再起動  x stop  n 作成  D 削除  a 別名  ! doctor  R 更新  Tab→ログ  q 終了"
-	}
-	return "j/k スクロール  f 追従  / フィルタ  p 前世代  w 折り返し  g/G  Tab→ツリー  q 終了"
 }
 
 // noteLine はフッターの一時メッセージ行。

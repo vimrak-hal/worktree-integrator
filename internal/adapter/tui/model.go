@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/help"
+	kb "github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -105,6 +107,11 @@ type model struct {
 	cfg *config.File
 	fw  *forwarder
 
+	// keys は全キーバインド、help はヘルプ行の描画器。キー処理は keys と
+	// kb.Matches で照合し、ヘルプ行は contextBindings を help が描く。
+	keys keyMap
+	help help.Model
+
 	width, height int
 	ready         bool
 	focus         focusID
@@ -175,6 +182,8 @@ func newModel(ctx context.Context, cfg *config.File, root statedir.Root, fw *for
 		root:   root,
 		cfg:    cfg,
 		fw:     fw,
+		keys:   newKeyMap(),
+		help:   newHelp(),
 		focus:  focusTree,
 		follow: true,
 		wrap:   true,
@@ -198,6 +207,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		// ヘルプ行の幅超過時の省略（…）を端末幅に合わせる。
+		m.help.Width = m.width
 		lw := m.leftW()
 		// クローム 3 行（ペインタイトル行・note 行・ヘルプ行）を除いた残りが本文。
 		m.vp = viewport.New(max(1, m.width-lw-1), max(1, m.height-3))
@@ -319,8 +330,8 @@ func (m *model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateDoctorKey(msg)
 	}
 
-	switch msg.String() {
-	case "q":
+	switch {
+	case kb.Matches(msg, m.keys.Quit):
 		if m.opRunning {
 			// 操作の途中で抜けると中断されるため、完了を待つ（強制終了は Ctrl-C）。
 			m.quitAfterOp = true
@@ -328,10 +339,10 @@ func (m *model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, tea.Quit
-	case "tab", "left", "right", "h", "l":
+	case kb.Matches(msg, m.keys.Focus):
 		m.toggleFocus()
 		return m, nil
-	case "!":
+	case kb.Matches(msg, m.keys.Doctor):
 		return m.startOp("doctor", m.doctorCmd(false))
 	}
 
@@ -437,20 +448,20 @@ func (m *model) updateCreateReposKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.repos != nil {
 		n = len(m.repos.Repos)
 	}
-	switch msg.String() {
-	case "j", "down":
+	switch {
+	case kb.Matches(msg, m.keys.Down):
 		if m.repoSel < n-1 {
 			m.repoSel++
 		}
-	case "k", "up":
+	case kb.Matches(msg, m.keys.Up):
 		if m.repoSel > 0 {
 			m.repoSel--
 		}
-	case " ":
+	case kb.Matches(msg, m.keys.ToggleRepo):
 		if m.repoSel >= 0 && m.repoSel < len(m.repoChecked) {
 			m.repoChecked[m.repoSel] = !m.repoChecked[m.repoSel]
 		}
-	case "a":
+	case kb.Matches(msg, m.keys.AllRepos):
 		// 全選択 / 全解除のトグル（1 つでも未選択なら全選択、そうでなければ全解除）。
 		all := true
 		for _, c := range m.repoChecked {
@@ -462,7 +473,7 @@ func (m *model) updateCreateReposKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		for i := range m.repoChecked {
 			m.repoChecked[i] = !all
 		}
-	case "enter":
+	case kb.Matches(msg, m.keys.Confirm):
 		var repos []string
 		for i, c := range m.repoChecked {
 			if c {
@@ -475,7 +486,7 @@ func (m *model) updateCreateReposKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.prompt = promptNone
 		return m.startOp("create "+m.createName, m.createCmd(m.createName, repos))
-	case "esc":
+	case kb.Matches(msg, m.keys.Cancel):
 		m.prompt = promptNone
 	}
 	return m, nil
@@ -483,7 +494,7 @@ func (m *model) updateCreateReposKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // updateConfirmRemoveKey は削除の確認。y のみ実行、それ以外は中止。
 func (m *model) updateConfirmRemoveKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == "y" {
+	if kb.Matches(msg, m.keys.RemoveYes) {
 		m.prompt = promptNone
 		return m.startOp("remove "+m.promptTarget, m.removeCmd(m.promptTarget))
 	}
@@ -493,24 +504,24 @@ func (m *model) updateConfirmRemoveKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // updateDoctorKey は doctor 結果ペイン中のキー操作。q は終了ではなく結果を閉じる。
 func (m *model) updateDoctorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc", "q":
+	switch {
+	case kb.Matches(msg, m.keys.Cancel), kb.Matches(msg, m.keys.Quit):
 		m.doctorMode = false
 		m.doctorText = nil
 		m.rebuildLog()
-	case "F":
+	case kb.Matches(msg, m.keys.Fix):
 		return m.startOp("doctor", m.doctorCmd(true))
-	case "j", "down":
+	case kb.Matches(msg, m.keys.LineDown):
 		m.vp.ScrollDown(1)
-	case "k", "up":
+	case kb.Matches(msg, m.keys.LineUp):
 		m.vp.ScrollUp(1)
-	case "d":
+	case kb.Matches(msg, m.keys.HalfDown):
 		m.vp.HalfPageDown()
-	case "u":
+	case kb.Matches(msg, m.keys.HalfUp):
 		m.vp.HalfPageUp()
-	case "g":
+	case kb.Matches(msg, m.keys.Top):
 		m.vp.GotoTop()
-	case "G":
+	case kb.Matches(msg, m.keys.Bottom):
 		m.vp.GotoBottom()
 	}
 	return m, nil
@@ -518,37 +529,37 @@ func (m *model) updateDoctorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // updateTreeKey は左ペイン（ツリー）にフォーカスがあるときのキー操作。
 func (m *model) updateTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "j", "down":
+	switch {
+	case kb.Matches(msg, m.keys.Down):
 		return m, m.moveSel(1)
-	case "k", "up":
+	case kb.Matches(msg, m.keys.Up):
 		return m, m.moveSel(-1)
-	case "enter", "s":
+	case kb.Matches(msg, m.keys.SwitchTo):
 		if wt, ok := m.selectedWorktree(); ok {
 			return m.startOp("switch "+wt, m.switchCmd(wt, false))
 		}
-	case "r":
+	case kb.Matches(msg, m.keys.Restart):
 		if wt, ok := m.selectedWorktree(); ok {
 			return m.startOp("switch --restart "+wt, m.switchCmd(wt, true))
 		}
-	case "x":
+	case kb.Matches(msg, m.keys.Stop):
 		if wt, ok := m.selectedWorktree(); ok {
 			return m.startOp("stop "+wt, m.stopCmd(wt))
 		}
-	case "R":
+	case kb.Matches(msg, m.keys.Refresh):
 		return m, m.treesCmd()
-	case "n":
+	case kb.Matches(msg, m.keys.New):
 		m.prompt = promptCreateName
 		m.input.Prompt = "名前: "
 		m.input.Placeholder = "worktree 名"
 		m.input.SetValue("")
 		m.input.Focus()
-	case "D":
+	case kb.Matches(msg, m.keys.Delete):
 		if wt, ok := m.selectedWorktree(); ok {
 			m.promptTarget = wt
 			m.prompt = promptConfirmRemove
 		}
-	case "a":
+	case kb.Matches(msg, m.keys.Alias):
 		if wt, ok := m.selectedWorktree(); ok {
 			m.promptTarget = wt
 			m.prompt = promptAlias
@@ -564,13 +575,13 @@ func (m *model) updateTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // updateLogKey は右ペイン（ログ）にフォーカスがあるときのキー操作。
 func (m *model) updateLogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "f":
+	switch {
+	case kb.Matches(msg, m.keys.Follow):
 		m.follow = !m.follow
 		if m.follow {
 			m.vp.GotoBottom()
 		}
-	case "/":
+	case kb.Matches(msg, m.keys.Filter):
 		m.prompt = promptFilter
 		m.filtering = true
 		m.input.Prompt = "/"
@@ -578,35 +589,35 @@ func (m *model) updateLogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.SetValue(m.filter)
 		m.input.CursorEnd()
 		m.input.Focus()
-	case "p":
+	case kb.Matches(msg, m.keys.Prev):
 		m.prev = !m.prev
 		// パスが変わる（.prev ⇔ 現行）ため即座に再解決する。tailer は
 		// applyResolved のパス変化検出でリセットされる。
 		return m, m.resolveCmd()
-	case "w":
+	case kb.Matches(msg, m.keys.Wrap):
 		m.wrap = !m.wrap
 		m.rebuildLog()
-	case "esc":
+	case kb.Matches(msg, m.keys.ClearFilter):
 		if m.filter != "" {
 			m.filter = ""
 			m.input.SetValue("")
 			m.rebuildLog()
 		}
-	case "g":
+	case kb.Matches(msg, m.keys.Top):
 		m.follow = false
 		m.vp.GotoTop()
-	case "G":
+	case kb.Matches(msg, m.keys.Bottom):
 		m.vp.GotoBottom()
-	case "j", "down":
+	case kb.Matches(msg, m.keys.LineDown):
 		m.follow = false
 		m.vp.ScrollDown(1)
-	case "k", "up":
+	case kb.Matches(msg, m.keys.LineUp):
 		m.follow = false
 		m.vp.ScrollUp(1)
-	case "d", "pgdown":
+	case kb.Matches(msg, m.keys.HalfDown):
 		m.follow = false
 		m.vp.HalfPageDown()
-	case "u", "pgup":
+	case kb.Matches(msg, m.keys.HalfUp):
 		m.follow = false
 		m.vp.HalfPageUp()
 	}

@@ -42,6 +42,31 @@ func TestPadDisplayFixesWidth(t *testing.T) {
 	}
 }
 
+// ヘルプ行はフォーカス文脈ごとに主要な操作ラベルを bubbles/help で描く。ここでは
+// helpLine のハードコードを keymap + help へ移した後も、文脈別の項目が欠けていない
+// ことを担保する（キー挙動自体の不変は model_test のキー操作テストが裏付ける）。
+func TestHelpLineTreeContext(t *testing.T) {
+	m := newTestModel(t)
+	m.focus = focusTree
+	view := m.View()
+	for _, want := range []string{"switch", "作成", "doctor", "削除", "再起動"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("focusTree のヘルプ行に %q が無い", want)
+		}
+	}
+}
+
+func TestHelpLineLogContext(t *testing.T) {
+	m := newTestModel(t)
+	m.focus = focusLog
+	view := m.View()
+	for _, want := range []string{"追従", "フィルタ", "前世代", "折り返し"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("focusLog のヘルプ行に %q が無い", want)
+		}
+	}
+}
+
 // doctorMode は右ペインに doctor の結果テキストを表示する。
 func TestDoctorModeShowsResult(t *testing.T) {
 	m := newTestModel(t)
