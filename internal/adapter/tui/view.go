@@ -82,10 +82,22 @@ func (m *model) logTitle() string {
 	return title
 }
 
-// treeLines は左ペインの行を組む: スクロールするノード一覧の下に空行のフッターを置く。
+// treeLines は左ペインの行を組む: スクロールするノード一覧の下に、実行中表示と直近の
+// イベント履歴を固定で置く。
 func (m *model) treeLines(h int) []string {
-	// 下部に置くフッター（空行）を先に組み、残りをノード領域にする。
+	// 下部に置くフッター（空行 + 実行中 + イベント）を先に組み、残りをノード領域にする。
 	footer := []string{""}
+	if m.opRunning {
+		footer = append(footer, styNote.Render("実行中: "+m.opLabel+" …"))
+	}
+	if len(m.events) > 0 {
+		footer = append(footer, styHelp.Render("── イベント ──"))
+		ev := m.events
+		if len(ev) > 6 {
+			ev = ev[len(ev)-6:]
+		}
+		footer = append(footer, ev...)
+	}
 	if len(footer) > h {
 		footer = footer[:h]
 	}
@@ -214,7 +226,7 @@ func (m *model) helpLine() string {
 		return "入力でフィルタ  Enter 確定  Esc 解除"
 	}
 	if m.focus == focusTree {
-		return "j/k 選択  R 更新  Tab→ログ  q 終了"
+		return "j/k 選択  Enter/s switch  r 再起動  x stop  R 更新  Tab→ログ  q 終了"
 	}
 	return "j/k スクロール  f 追従  / フィルタ  p 前世代  w 折り返し  g/G  Tab→ツリー  q 終了"
 }
