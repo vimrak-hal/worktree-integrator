@@ -262,7 +262,9 @@ func (m *model) helpLine() string {
 	case promptCreateRepos:
 		return "j/k 選択  space 切替  a 全て  Enter 実行  Esc 中止"
 	case promptConfirmRemove:
-		return "y 削除実行  他キー 中止"
+		// 破壊的操作の確認は対象を明示する（どの worktree に y するのかを
+		// 押す瞬間に画面が示す）。
+		return fmt.Sprintf("worktree %q を削除しますか？  y 実行  他キー 中止", m.promptTarget)
 	}
 	if m.doctorMode {
 		return "F --fix 実行  j/k スクロール  Esc 閉じる"
