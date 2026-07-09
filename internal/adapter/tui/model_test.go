@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/vimrak-hal/worktree-integrator/internal/app"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/server"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/tree"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/config"
@@ -195,6 +196,222 @@ func TestQuitWaitsForRunningOperation(t *testing.T) {
 	}
 }
 
+// n → reposMsg 受信で作成フォーム（名前入力 + リポジトリ複数選択）が 1 枚で開く。
+func TestCreateFlowOpensForm(t *testing.T) {
+	m := newTestModel(t)
+	m.Update(key("n")) // reposCmd を発行（この時点ではまだフォームは無い）
+	if m.form != nil {
+		t.Fatal("n before reposMsg must not open a form yet")
+	}
+
+	m.Update(reposMsg{res: &app.ReposResult{Repos: []app.RepoInfo{{Name: "api"}, {Name: "web"}}}})
+	if m.form == nil || m.formKind != formCreate {
+		t.Fatalf("reposMsg must open the create form, got form=%v kind=%d", m.form != nil, m.formKind)
+	}
+	// 名前入力欄とリポジトリ選択の両方が 1 枚のフォームに含まれる。
+	view := m.form.View()
+	for _, want := range []string{"worktree 名", "作成先リポジトリ", "api", "web"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("create form view missing %q", want)
+		}
+	}
+}
+
+// 作成フォームの完了処理: 名前とリポジトリを持つ完了状態から createCmd を dispatch する。
+func TestFinishCreateForm(t *testing.T) {
+	m := newTestModel(t)
+	m.formKind = formCreate
+	m.formName = "feat-x"
+	m.formRepos = []string{"api"}
+	_, cmd := m.finishForm()
+	if cmd == nil {
+		t.Fatal("finishForm with a name and repos must return a create command")
+	}
+	if !m.opRunning {
+		t.Fatal("create must mark an operation as running")
+	}
+}
+
+// 名前が空・リポジトリ 0 件の作成フォームは note を出して破棄する（操作は起きない）。
+func TestFinishCreateFormRejectsEmpty(t *testing.T) {
+	m := newTestModel(t)
+	m.formKind = formCreate
+	m.formName = "  "
+	m.formRepos = []string{"api"}
+	if _, cmd := m.finishForm(); cmd != nil || m.opRunning {
+		t.Fatal("empty name must not start an operation")
+	}
+	if !m.noteErr {
+		t.Fatal("empty name must set an error note")
+	}
+
+	m2 := newTestModel(t)
+	m2.formKind = formCreate
+	m2.formName = "feat-x"
+	m2.formRepos = nil
+	if _, cmd := m2.finishForm(); cmd != nil || m2.opRunning {
+		t.Fatal("zero repos must not start an operation")
+	}
+}
+
+// D は削除確認フォームを開き、対象を保持する。formConfirm=true の完了で removeCmd。
+func TestRemoveConfirmFlow(t *testing.T) {
+	m := newTestModel(t)
+	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a"})
+	m.buildNodes()
+	m.Update(key("D"))
+	if m.form == nil || m.formKind != formRemove || m.promptTarget != "feat-a" {
+		t.Fatalf("D must open the remove form for feat-a, got form=%v kind=%d target=%q",
+			m.form != nil, m.formKind, m.promptTarget)
+	}
+
+	// 承認（true）で削除コマンドが発行される。
+	m.formConfirm = true
+	_, cmd := m.finishForm()
+	if cmd == nil {
+		t.Fatal("confirmed remove must return a remove command")
+	}
+	if !m.opRunning {
+		t.Fatal("remove must mark an operation as running")
+	}
+}
+
+// 削除確認を否定（false）した完了では何も起きない。
+func TestRemoveConfirmDeclined(t *testing.T) {
+	m := newTestModel(t)
+	m.promptTarget = "feat-a"
+	m.formKind = formRemove
+	m.formConfirm = false
+	if _, cmd := m.finishForm(); cmd != nil || m.opRunning {
+		t.Fatal("declined remove must not start an operation")
+	}
+}
+
+// a は選択 worktree の現在の別名を別名フォームにプリフィルする。
+func TestAliasPrefill(t *testing.T) {
+	m := newTestModel(t)
+	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Alias: "ログイン画面"})
+	m.buildNodes()
+	m.Update(key("a"))
+	if m.form == nil || m.formKind != formAlias {
+		t.Fatalf("a must open the alias form, got form=%v kind=%d", m.form != nil, m.formKind)
+	}
+	if m.formAlias != "ログイン画面" {
+		t.Fatalf("alias form must prefill the current alias, got %q", m.formAlias)
+	}
+	if !strings.Contains(m.form.View(), "ログイン画面") {
+		t.Error("alias form view must show the prefilled alias")
+	}
+}
+
+// Esc 相当（StateAborted）でフォームが畳まれ、note は出ない。
+func TestFormAbortClearsWithoutNote(t *testing.T) {
+	m := newTestModel(t)
+	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a"})
+	m.buildNodes()
+	m.Update(key("D"))
+	if m.form == nil {
+		t.Fatal("D must open the remove form")
+	}
+	m.Update(key("esc"))
+	if m.form != nil || m.formKind != formNone {
+		t.Fatalf("Esc must clear the form, got form=%v kind=%d", m.form != nil, m.formKind)
+	}
+	if m.note != "" {
+		t.Fatalf("aborting a form must not leave a note, got %q", m.note)
+	}
+}
+
+// C1: 作成フォーム最前面での Esc はフォームを畳む（updateKey が横取り。フィルタ非入力中）。
+func TestFormEscClosesCreateForm(t *testing.T) {
+	m := newTestModel(t)
+	m.Update(key("n"))
+	m.Update(reposMsg{res: &app.ReposResult{Repos: []app.RepoInfo{{Name: "api"}}}})
+	if m.form == nil || m.formKind != formCreate {
+		t.Fatalf("create form must be open, got form=%v kind=%d", m.form != nil, m.formKind)
+	}
+	m.Update(key("esc"))
+	if m.form != nil || m.formKind != formNone {
+		t.Fatalf("Esc must close the create form, got form=%v kind=%d", m.form != nil, m.formKind)
+	}
+}
+
+// C1: 削除確認フォームでの Esc はフォームを畳み、removeCmd を起動しない。
+func TestFormEscDoesNotRunRemove(t *testing.T) {
+	m := newTestModel(t)
+	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a"})
+	m.buildNodes()
+	m.Update(key("D"))
+	if m.form == nil || m.formKind != formRemove {
+		t.Fatalf("D must open the remove form, got form=%v kind=%d", m.form != nil, m.formKind)
+	}
+	_, cmd := m.Update(key("esc"))
+	if m.form != nil || m.formKind != formNone {
+		t.Fatalf("Esc must close the remove form, got form=%v kind=%d", m.form != nil, m.formKind)
+	}
+	if m.opRunning {
+		t.Fatal("Esc must not start a remove operation")
+	}
+	if cmd != nil {
+		t.Fatal("Esc on the remove form must not dispatch a command")
+	}
+}
+
+// C1: formFiltering は Input にフォーカスがあるフォーム（フィルタ非対応）では false。
+func TestFormFilteringFalseForInputFocus(t *testing.T) {
+	name := ""
+	var sel []string
+	form := newCreateForm([]app.RepoInfo{{Name: "api"}}, &name, &sel, 40)
+	if formFiltering(form) {
+		t.Fatal("Input フォーカスのフォームをフィルタ入力中と判定してはいけない")
+	}
+	if formFiltering(nil) {
+		t.Fatal("nil フォームは常に false")
+	}
+}
+
+// B1: reposMsg 到着前に別フォーム（削除）を開くと、遅れて届いた候補は破棄され、開いて
+// いるフォームを作成フォームで潰さない。
+func TestReposMsgGuardedWhileFormOpen(t *testing.T) {
+	m := newTestModel(t)
+	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a"})
+	m.buildNodes()
+	m.Update(key("n")) // reposCmd 発行（フォームはまだ無い）
+	m.Update(key("D")) // 先に削除フォームを開く
+	if m.formKind != formRemove {
+		t.Fatalf("D must open the remove form, got kind=%d", m.formKind)
+	}
+	// 遅れて届いた候補。削除フォームを潰さず破棄される。
+	m.Update(reposMsg{res: &app.ReposResult{Repos: []app.RepoInfo{{Name: "api"}}}})
+	if m.formKind != formRemove {
+		t.Fatalf("late reposMsg must not replace the open form, got kind=%d", m.formKind)
+	}
+}
+
+// B1（非回帰）: 通常の n → reposMsg で作成フォームが開く。
+func TestReposMsgOpensFormWhenIdle(t *testing.T) {
+	m := newTestModel(t)
+	m.Update(key("n"))
+	m.Update(reposMsg{res: &app.ReposResult{Repos: []app.RepoInfo{{Name: "api"}}}})
+	if m.form == nil || m.formKind != formCreate {
+		t.Fatalf("idle reposMsg must open the create form, got form=%v kind=%d", m.form != nil, m.formKind)
+	}
+}
+
+// C10: 操作実行中の n は候補取得を発行せず note を出す（入力後に弾かれる無駄を防ぐ）。
+func TestNewGuardedWhileOpRunning(t *testing.T) {
+	m := newTestModel(t)
+	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a"})
+	m.buildNodes()
+	m.opRunning = true
+	if _, cmd := m.Update(key("n")); cmd != nil {
+		t.Fatal("n during an operation must not dispatch reposCmd")
+	}
+	if !m.noteErr {
+		t.Fatal("n during an operation must set an error note")
+	}
+}
+
 // B2: 新しい seq の path 適用後、古い seq の missing=true が届いてもバッファは消えない
 // （発行順の世代で古い解決を弾く）。
 func TestApplyResolvedIgnoresStaleSeq(t *testing.T) {
@@ -265,5 +482,22 @@ func TestWindowResizePreservesYOffset(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
 	if m.vp.YOffset != off {
 		t.Fatalf("resize must preserve YOffset, got %d want %d", m.vp.YOffset, off)
+	}
+}
+
+// C6: doctor 遷移では直前のログ閲覧の YOffset を捨て、必ず先頭から表示する。
+func TestDoctorTransitionResetsYOffset(t *testing.T) {
+	m := newTestModel(t)
+	m.vp.SetContent(strings.Repeat("x\n", 100))
+	m.vp.SetYOffset(40)
+	if m.vp.YOffset == 0 {
+		t.Fatal("test setup: YOffset must be advanced")
+	}
+	m.Update(opDoneMsg{summary: "doctor 完了", doctorText: []string{"a", "b", "c"}})
+	if !m.doctorMode {
+		t.Fatal("doctorText must switch to doctor mode")
+	}
+	if m.vp.YOffset != 0 {
+		t.Fatalf("doctor transition must go to top, got YOffset=%d", m.vp.YOffset)
 	}
 }

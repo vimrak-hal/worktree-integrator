@@ -1,11 +1,12 @@
 // Package tui は端末上の対話 UI（`wt ui`）である。lazygit 風の 1 画面 2 ペインで、
 // 左ペインに worktree → サーバーのツリー（選択・操作）、右ペインに選択サーバーの
-// ログを表示する。ツリーからは server switch / stop を実行できる（全ログのマージ
-// 表示は廃止した）。
+// ログを表示する。ツリーからは server switch / stop に加え、worktree の作成・削除・
+// 別名・doctor を統合して実行できる（全ログのマージ表示は廃止した）。
 //
-// TUI は既存の CLI コマンドを置き換えない。各操作は同名の CLI コマンド（wt server
-// switch / stop / logs）と同じワークフロー（App の型付きメソッド）を呼ぶ追加の
-// フロントエンドであり、同じ操作は従来どおり CLI からも実行できる。
+// TUI は既存の CLI コマンドを置き換えない。各操作は同名の CLI コマンド（wt create /
+// remove / alias / doctor / server switch / stop / logs）と同じワークフロー（App の
+// 型付きメソッド）を呼ぶ追加のフロントエンドであり、同じ操作は従来どおり CLI からも
+// 実行できる。
 //
 // TUI は CLI 専用の実行モードであり、action の語彙には存在しない。`server logs -f`
 // （FollowLogs）と同じ理由で MCP からは型レベルで到達不能である: stdio を JSON-RPC が
