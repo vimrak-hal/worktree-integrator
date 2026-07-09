@@ -6,6 +6,10 @@ import (
 	"strings"
 )
 
+// visibleEvents は左ペインのフッターに表示するイベント履歴の行数。フッターを短く保ち、
+// ノード一覧の領域を潰さないための上限。
+const visibleEvents = 6
+
 // View は現在のモデルを 1 画面に描画する。レイアウトは lazygit 風の 2 ペイン: 固定 3 行の
 // クローム（ペインタイトル行・note 行・ヘルプ行）と、その間の本文（左=ツリー、右=ログ）を
 // "│" で縦に区切る。本文の高さはビューポートと同じ height-3 に揃える。
@@ -84,10 +88,22 @@ func (m *model) logTitle() string {
 	return title
 }
 
-// treeLines は左ペインの行を組む: スクロールするノード一覧の下に空行のフッターを置く。
+// treeLines は左ペインの行を組む: スクロールするノード一覧の下に、実行中表示と直近の
+// イベント履歴を固定で置く。
 func (m *model) treeLines(h int) []string {
-	// 下部に置くフッター（空行）を先に組み、残りをノード領域にする。
+	// 下部に置くフッター（空行 + 実行中 + イベント）を先に組み、残りをノード領域にする。
 	footer := []string{""}
+	if m.opRunning {
+		footer = append(footer, styNote.Render("実行中: "+m.opLabel+" …"))
+	}
+	if len(m.events) > 0 {
+		footer = append(footer, styHelp.Render("── イベント ──"))
+		ev := m.events
+		if len(ev) > visibleEvents {
+			ev = ev[len(ev)-visibleEvents:]
+		}
+		footer = append(footer, ev...)
+	}
 	if len(footer) > h {
 		footer = footer[:h]
 	}
