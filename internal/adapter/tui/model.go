@@ -3,9 +3,12 @@ package tui
 import (
 	"context"
 	"sort"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/help"
 	kb "github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/app/server"
@@ -15,13 +18,31 @@ import (
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/statedir"
 )
 
-// focusID はキー入力を受けるペイン。左（ツリー）と右（ログ）の 2 ペインを表し、
-// ペイン見出しはフォーカス側を反転で強調する。
+// focusID はキー入力を受けるペイン。lazygit 風に左（ツリー）と右（ログ）の 2 ペインを
+// Tab で行き来する。
 type focusID int
 
 const (
 	focusTree focusID = iota
 	focusLog
+)
+
+// promptMode は最前面のモーダル入力の種類。promptNone 以外のときはキー入力を
+// 各プロンプトのハンドラが最優先で消費する。
+type promptMode int
+
+const (
+	promptNone promptMode = iota
+	promptFilter
+)
+
+// バッファの保持行数と描画上限。単一サーバーのログだけを表示するため、マージ用の
+// 大きなリングは持たない。
+const (
+	targetRingCap = 4000
+	// maxRender はビューポートへ流す最大行数。フィルタ後にこれを超える分は古い側を
+	// 落とす（描画コストの上限）。
+	maxRender = 2000
 )
 
 // node はツリーの 1 行。worktree ノード（repo == ""）と、その配下のサーバーノード
@@ -46,12 +67,29 @@ func (n node) isWorktree() bool { return n.repo == "" }
 
 // key はノードの同一性。worktree ノードは wt 名、サーバーノードは
 // wt + "\x00" + repo + "/" + server で単射に表す（repo / server は '/' を含まない
-// よう検証済み、wt は '/' を含みうるが "\x00" 区切りで一意）。
+// よう検証済み、wt は '/' を含みうるが "\x00" 区切りで一意）。この key がログ対象・
+// tailer・バッファのキー（curKey）でもある。
 func (n node) key() string {
 	if n.isWorktree() {
 		return n.wt
 	}
 	return n.wt + "\x00" + n.repo + "/" + n.server
+}
+
+// splitKey はサーバーノードの key を (wt, repo, server) へ復元する。壊れた key
+// （worktree ノードの key や不正な形）は ok=false。
+func splitKey(key string) (wt, repo, server string, ok bool) {
+	i := strings.IndexByte(key, 0)
+	if i < 0 {
+		return "", "", "", false
+	}
+	wt = key[:i]
+	rs := key[i+1:]
+	j := strings.IndexByte(rs, '/')
+	if j < 0 {
+		return "", "", "", false
+	}
+	return wt, rs[:j], rs[j+1:], true
 }
 
 // model は TUI 全体の状態。Bubble Tea の Elm アーキテクチャに乗り、更新は
@@ -82,11 +120,33 @@ type model struct {
 	// treeTop はツリーの縦スクロール位置（可視域の先頭 nodes インデックス）。
 	treeTop int
 
+	// --- ログ（右ペイン） ---
+	// curKey は表示中サーバーノードの key（空はプレースホルダ）。
+	curKey     string
+	curPath    string
+	curMissing bool
+	curReadErr string
+	tails      map[string]*tailer
+	bufs       map[string]*ring
+	vp         viewport.Model
+	// prev は 1 世代前のログ（.prev）を見るモード。
+	prev bool
+	// follow は末尾追従（tail -f 相当）。上方向へのスクロールで解除される。
+	follow bool
+	// wrap は長い行の折り返し（オフなら端末幅で切り詰め）。
+	wrap bool
+	// filter は部分一致（大文字小文字を無視）の表示フィルタ。
+	filter    string
+	filtering bool
+	input     textinput.Model
 	// resolveSeq は resolveCmd の発行カウンタ、resolveApplied は適用済みの最大世代。
-	// ロック競合で遅延した古い解決が新しい解決を追い越さないよう、発行順の世代で
-	// 古い結果を捨てる（B2）。
+	// selKey 照合はカーソル移動しか弾けず、ロック競合で遅延した古い解決が新しい解決を
+	// 追い越すと path が巻き戻るため、発行順の世代で古い結果を捨てる（B2）。
 	resolveSeq     uint64
 	resolveApplied uint64
+
+	// --- モーダル ---
+	prompt promptMode
 
 	// note はフッターの一時メッセージ（直近の操作結果・警告）。
 	note    string
@@ -94,18 +154,26 @@ type model struct {
 }
 
 func newModel(ctx context.Context, cfg *config.File, root statedir.Root) *model {
+	input := textinput.New()
+	input.Prompt = "/"
+	input.Placeholder = "フィルタ（部分一致）"
 	return &model{
-		ctx:   ctx,
-		root:  root,
-		cfg:   cfg,
-		keys:  newKeyMap(),
-		help:  newHelp(),
-		focus: focusTree,
+		ctx:    ctx,
+		root:   root,
+		cfg:    cfg,
+		keys:   newKeyMap(),
+		help:   newHelp(),
+		focus:  focusTree,
+		follow: true,
+		wrap:   true,
+		input:  input,
+		tails:  map[string]*tailer{},
+		bufs:   map[string]*ring{},
 	}
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.resolveCmd(), m.treesCmd(), resolveTick(), treesTick())
+	return tea.Batch(m.resolveCmd(), m.treesCmd(), tailTick(), resolveTick(), treesTick())
 }
 
 // leftW は左ペイン（ツリー）の表示幅。端末幅の 1/3 を基準に、狭すぎ・広すぎを避けて
@@ -120,8 +188,27 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		// ヘルプ行の幅超過時の省略（…）を端末幅に合わせる。
 		m.help.Width = m.width
-		m.ready = true
+		lw := m.leftW()
+		// クローム 3 行（ペインタイトル行・note 行・ヘルプ行）を除いた残りが本文。
+		w, h := max(1, m.width-lw-1), max(1, m.height-3)
+		if !m.ready {
+			m.vp = viewport.New(w, h)
+			m.ready = true
+		} else {
+			// 作り直すと YOffset が 0 に戻り、追従オフで過去ログを読んでいる最中の
+			// リサイズで先頭へ飛ぶ。viewport は派生状態を都度計算するので、
+			// 幅・高さの直接代入で YOffset を保ったまま更新できる。
+			m.vp.Width = w
+			m.vp.Height = h
+		}
+		m.rebuildLog()
 		return m, nil
+
+	case tailTickMsg:
+		if m.pollTail() {
+			m.rebuildLog()
+		}
+		return m, tailTick()
 
 	case resolveTickMsg:
 		return m, tea.Batch(m.resolveCmd(), resolveTick())
@@ -144,7 +231,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd := m.ensureSelection(); cmd != nil {
 			return m, cmd
 		}
+		m.rebuildLog()
 		return m, nil
+
+	case tea.MouseMsg:
+		// フォーカスに関わらずホイールでログをスクロールする。上方向は追従を解除。
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonWheelUp {
+			m.follow = false
+		}
+		var cmd tea.Cmd
+		m.vp, cmd = m.vp.Update(msg)
+		return m, cmd
 
 	case tea.KeyMsg:
 		return m.updateKey(msg)
@@ -152,18 +249,62 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateKey はキー入力をさばく。
+// updateKey はキー入力をさばく。モーダル（プロンプト）を最優先で処理し、その後に
+// グローバル・ペイン別のキーへ落とす。
 func (m *model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyCtrlC {
 		return m, tea.Quit
 	}
 
+	if m.prompt == promptFilter {
+		return m.updateFilterKey(msg)
+	}
+
 	switch {
 	case kb.Matches(msg, m.keys.Quit):
 		return m, tea.Quit
+	case kb.Matches(msg, m.keys.Focus):
+		m.toggleFocus()
+		return m, nil
 	}
 
-	return m.updateTreeKey(msg)
+	if m.focus == focusTree {
+		return m.updateTreeKey(msg)
+	}
+	return m.updateLogKey(msg)
+}
+
+func (m *model) toggleFocus() {
+	if m.focus == focusTree {
+		m.focus = focusLog
+	} else {
+		m.focus = focusTree
+	}
+}
+
+// updateFilterKey はフィルタ入力中のキー操作（ライブ反映）。
+func (m *model) updateFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEnter:
+		m.prompt = promptNone
+		m.filtering = false
+		m.input.Blur()
+	case tea.KeyEscape:
+		m.prompt = promptNone
+		m.filtering = false
+		m.filter = ""
+		m.input.SetValue("")
+		m.input.Blur()
+		m.rebuildLog()
+	default:
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		// ライブフィルタ: 1 打鍵ごとに絞り込みが反映される。
+		m.filter = m.input.Value()
+		m.rebuildLog()
+		return m, cmd
+	}
+	return m, nil
 }
 
 // updateTreeKey は左ペイン（ツリー）にフォーカスがあるときのキー操作。
@@ -179,13 +320,81 @@ func (m *model) updateTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// moveSel はツリーのカーソルを delta 分動かす。
+// updateLogKey は右ペイン（ログ）にフォーカスがあるときのキー操作。
+func (m *model) updateLogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case kb.Matches(msg, m.keys.Follow):
+		m.follow = !m.follow
+		if m.follow {
+			m.vp.GotoBottom()
+		}
+	case kb.Matches(msg, m.keys.Filter):
+		m.prompt = promptFilter
+		m.filtering = true
+		m.input.Prompt = "/"
+		m.input.Placeholder = "フィルタ（部分一致）"
+		m.input.SetValue(m.filter)
+		m.input.CursorEnd()
+		m.input.Focus()
+	case kb.Matches(msg, m.keys.Prev):
+		m.prev = !m.prev
+		// パスが変わる（.prev ⇔ 現行）ため即座に再解決する。tailer は
+		// applyResolved のパス変化検出でリセットされる。
+		return m, m.resolveCmd()
+	case kb.Matches(msg, m.keys.Wrap):
+		m.wrap = !m.wrap
+		m.rebuildLog()
+	case kb.Matches(msg, m.keys.ClearFilter):
+		if m.filter != "" {
+			m.filter = ""
+			m.input.SetValue("")
+			m.rebuildLog()
+		}
+	case kb.Matches(msg, m.keys.Top):
+		m.follow = false
+		m.vp.GotoTop()
+	case kb.Matches(msg, m.keys.Bottom):
+		m.vp.GotoBottom()
+	case kb.Matches(msg, m.keys.LineDown):
+		m.follow = false
+		m.vp.ScrollDown(1)
+	case kb.Matches(msg, m.keys.LineUp):
+		m.follow = false
+		m.vp.ScrollUp(1)
+	case kb.Matches(msg, m.keys.HalfDown):
+		m.follow = false
+		m.vp.HalfPageDown()
+	case kb.Matches(msg, m.keys.HalfUp):
+		m.follow = false
+		m.vp.HalfPageUp()
+	}
+	return m, nil
+}
+
+// moveSel はツリーのカーソルを delta 分動かす。サーバーノードに乗ったら表示ログ対象
+// （curKey）を切り替え、worktree ノード上では対象を維持する。
 func (m *model) moveSel(delta int) tea.Cmd {
 	if len(m.nodes) == 0 {
 		return nil
 	}
 	m.sel = clamp(m.sel+delta, 0, len(m.nodes)-1)
+	n := m.nodes[m.sel]
+	if !n.isWorktree() {
+		if k := n.key(); k != m.curKey {
+			m.curKey = k
+			return m.selectTarget()
+		}
+	}
 	return nil
+}
+
+// selectedWorktree はカーソル位置のノードが属する worktree 名を返す（worktree ノード・
+// サーバーノードのどちらでも親の worktree 名になる）。
+func (m *model) selectedWorktree() (string, bool) {
+	if m.sel < 0 || m.sel >= len(m.nodes) {
+		return "", false
+	}
+	return m.nodes[m.sel].wt, true
 }
 
 // buildNodes は trees・設定のサーバー定義・status から nodes を再構築する。各 worktree
@@ -267,19 +476,87 @@ func (m *model) buildNodes() {
 		}
 	}
 	m.sel = clamp(m.sel, 0, max(0, len(nodes)-1))
+
+	// worktree の作成→削除を繰り返すと key が毎回変わり、掃除しないとリング
+	// （最大 targetRingCap 行）が対象ごとに残ってヒープが単調増加する。現存する
+	// サーバーノードの key 集合に無い tailer / バッファを落とす（tailer は poll ごとに
+	// open/close なので fd の後始末は不要）。curKey は ensureSelection でノード集合内へ
+	// 戻るが、表示中の対象は防御的に保護する。
+	live := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		if !n.isWorktree() {
+			live[n.key()] = true
+		}
+	}
+	for k := range m.tails {
+		if !live[k] && k != m.curKey {
+			delete(m.tails, k)
+		}
+	}
+	for k := range m.bufs {
+		if !live[k] && k != m.curKey {
+			delete(m.bufs, k)
+		}
+	}
 }
 
-// ensureSelection はツリー再構築後の選択状態を整えるフック。カーソル位置（sel）は
-// buildNodes が確定させるためこの段では追加の処理は無いが、treesMsg のハンドラ構造を
-// 保つためコマンドを返す余地を残している。
+// ensureSelection は curKey を有効なサーバーノードに保つ。消えた対象はプレースホルダへ
+// 戻し、未選択（初回など）なら最初のサーバーノードへ合わせて再解決する。
 func (m *model) ensureSelection() tea.Cmd {
+	if m.curKey != "" && !m.hasNode(m.curKey) {
+		// 対象が消えたら表示をプレースホルダへ戻す。
+		m.curKey = ""
+	}
+	if m.curKey == "" {
+		if k, ok := m.firstServerKey(); ok {
+			m.curKey = k
+			return m.selectTarget()
+		}
+	}
 	return nil
 }
 
-// applyResolved は再解決の結果（設定・状態）をモデルへ写す。selKey 照合はカーソル移動
-// しか弾けないため、発行から到着までに遅延した古い解決を発行順の世代（seq）で捨てる。
+func (m *model) hasNode(key string) bool {
+	for _, n := range m.nodes {
+		if n.key() == key {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *model) firstServerKey() (string, bool) {
+	for _, n := range m.nodes {
+		if !n.isWorktree() {
+			return n.key(), true
+		}
+	}
+	return "", false
+}
+
+// selectTarget は curKey を切り替えた直後の処理。既存バッファがあれば過去分を即座に
+// 表示し、いずれにせよ再解決でパスを取り直す。
+func (m *model) selectTarget() tea.Cmd {
+	m.follow = true
+	m.curReadErr = ""
+	if _, ok := m.bufs[m.curKey]; !ok {
+		// まだバッファが無い対象はパス解決までプレースホルダを出す。
+		m.curPath = ""
+		m.curMissing = false
+	}
+	m.rebuildLog()
+	return m.resolveCmd()
+}
+
+// applyResolved は再解決の結果（設定・状態・選択対象のログパス）をモデルへ写す。
+// selKey が現在の curKey と一致するときだけログ対象を更新する（発行から到着までに
+// 選択が動いた古い結果を無視するための照合）。パスが変わった対象（外部の switch や
+// --prev トグル）は tailer とバッファを作り直し、新しいログを末尾から読み直す。
 func (m *model) applyResolved(msg resolvedMsg) {
-	// 等号は許容（同一 seq は来ない設計だが安全側に倒す）。
+	// selKey 照合はカーソル移動しか弾けない。switch 直後などロック競合で遅延した古い
+	// 解決が新しい解決を追い越すと、missing がバッファを消し path が巻き戻るため、
+	// 発行順の世代（seq）で古い解決を捨てる。等号は許容（同一 seq は来ない設計だが
+	// 安全側に倒す）。
 	if msg.seq < m.resolveApplied {
 		return
 	}
@@ -296,6 +573,93 @@ func (m *model) applyResolved(msg resolvedMsg) {
 	}
 	m.status = msg.status
 	m.buildNodes()
+
+	if msg.selKey == m.curKey && m.curKey != "" {
+		switch {
+		case msg.missing:
+			// ログ未生成: 追跡をやめてプレースホルダを出す（期待パスは保持）。
+			m.curMissing = true
+			m.curPath = msg.path
+			delete(m.tails, m.curKey)
+			delete(m.bufs, m.curKey)
+		case msg.path != "":
+			m.curMissing = false
+			if msg.path != m.curPath || m.tails[m.curKey] == nil {
+				m.curPath = msg.path
+				m.tails[m.curKey] = newTailer(msg.path)
+				m.bufs[m.curKey] = newRing(targetRingCap)
+				m.curReadErr = ""
+			}
+			m.pollTail()
+		}
+	}
+	m.rebuildLog()
+}
+
+// pollTail は選択中の対象 1 本だけを増分読みし、バッファへ追記する。追記があったかを
+// 返す（全対象を毎ティック読むのは廃止 — 表示しているログのみ追う）。
+func (m *model) pollTail() bool {
+	if m.curKey == "" {
+		return false
+	}
+	tail := m.tails[m.curKey]
+	buf := m.bufs[m.curKey]
+	if tail == nil || buf == nil {
+		return false
+	}
+	lines, err := tail.poll()
+	if err != nil {
+		m.curReadErr = err.Error()
+		return false
+	}
+	m.curReadErr = ""
+	if len(lines) == 0 {
+		return false
+	}
+	buf.push(lines...)
+	return true
+}
+
+// rebuildLog は現在の選択・フィルタからビューポートの内容を組み立て直す。
+func (m *model) rebuildLog() {
+	if !m.ready {
+		return
+	}
+	if m.curKey == "" {
+		m.vp.SetContent("サーバーノードを選択してください")
+		return
+	}
+	buf := m.bufs[m.curKey]
+	if buf == nil {
+		if m.curMissing {
+			m.vp.SetContent("ログがまだありません (" + m.curPath + ")")
+		} else {
+			m.vp.SetContent("ログを解決中…")
+		}
+		return
+	}
+
+	filter := strings.ToLower(m.filter)
+	src := buf.slice()
+	rendered := make([]string, 0, len(src))
+	for _, text := range src {
+		if filter != "" && !strings.Contains(strings.ToLower(text), filter) {
+			continue
+		}
+		rendered = append(rendered, colorizeLog(text))
+	}
+	if len(rendered) > maxRender {
+		rendered = rendered[len(rendered)-maxRender:]
+	}
+	if m.wrap {
+		for i, text := range rendered {
+			rendered[i] = wrapDisplay(text, m.vp.Width)
+		}
+	}
+	m.vp.SetContent(strings.Join(rendered, "\n"))
+	if m.follow {
+		m.vp.GotoBottom()
+	}
 }
 
 func clamp(v, lo, hi int) int {

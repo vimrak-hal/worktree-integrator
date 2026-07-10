@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -32,6 +35,21 @@ func serverCfg() *config.File {
 
 func treesResult(rows ...tree.WorktreeRow) *tree.ListResult {
 	return &tree.ListResult{Worktrees: rows}
+}
+
+func key(msg string) tea.KeyMsg {
+	if len(msg) == 1 {
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(msg)}
+	}
+	switch msg {
+	case "tab":
+		return tea.KeyMsg{Type: tea.KeyTab}
+	case "esc":
+		return tea.KeyMsg{Type: tea.KeyEscape}
+	case "enter":
+		return tea.KeyMsg{Type: tea.KeyEnter}
+	}
+	panic("unknown key " + msg)
 }
 
 // buildNodes は worktree ノードの配下に、メンバー repo に設定された全サーバーを
@@ -73,8 +91,9 @@ func TestBuildNodesLayout(t *testing.T) {
 	}
 }
 
-// moveSel はツリーのカーソル（sel）を上下に動かし、両端でクランプする。
-func TestMoveSelMovesCursor(t *testing.T) {
+// サーバーノードへ移動すると表示ログ対象（curKey）が変わり、worktree ノード上では
+// 対象が維持される。
+func TestMoveSelUpdatesTarget(t *testing.T) {
 	m := newTestModel(t)
 	m.cfg = serverCfg()
 	m.trees = treesResult(
@@ -83,44 +102,149 @@ func TestMoveSelMovesCursor(t *testing.T) {
 	)
 	m.buildNodes()
 
-	if m.sel != 0 {
-		t.Fatalf("initial sel = %d, want 0", m.sel)
+	m.moveSel(1) // feat-a/api/backend
+	if m.curKey != "feat-a\x00api/backend" {
+		t.Fatalf("curKey after first move = %q", m.curKey)
 	}
-	m.moveSel(1)
-	if m.sel != 1 {
-		t.Fatalf("sel after down = %d, want 1", m.sel)
+	m.moveSel(1) // feat-a/api/web
+	if m.curKey != "feat-a\x00api/web" {
+		t.Fatalf("curKey after second move = %q", m.curKey)
 	}
-	// 先頭より上へは動かない（クランプ）。
-	m.moveSel(-5)
-	if m.sel != 0 {
-		t.Fatalf("sel clamped low = %d, want 0", m.sel)
+	held := m.curKey
+	m.moveSel(1) // feat-b (worktree ノード)
+	if !m.nodes[m.sel].isWorktree() {
+		t.Fatalf("expected cursor on a worktree node, got %+v", m.nodes[m.sel])
 	}
-	// 末尾より下へは動かない。
-	m.moveSel(100)
-	if want := len(m.nodes) - 1; m.sel != want {
-		t.Fatalf("sel clamped high = %d, want %d", m.sel, want)
+	if m.curKey != held {
+		t.Fatalf("worktree ノード上で curKey が変わった: %q → %q", held, m.curKey)
 	}
 }
 
-// B2: 新しい seq の解決を適用した後、遅れて届いた古い seq は無視される（発行順の世代で
-// 古い解決を弾く）。
+// パスが変わった対象（外部の switch・--prev トグル）はバッファごと読み直しになる。
+func TestApplyResolvedResetsOnPathChange(t *testing.T) {
+	m := newTestModel(t)
+	dir := t.TempDir()
+	oldLog := filepath.Join(dir, "feat-a.log")
+	newLog := filepath.Join(dir, "feat-b.log")
+	os.WriteFile(oldLog, []byte("old line\n"), 0o644)
+	os.WriteFile(newLog, []byte("new line\n"), 0o644)
+
+	k := "feat-a\x00api/backend"
+	m.curKey = k
+	m.applyResolved(resolvedMsg{selKey: k, path: oldLog, status: &server.StatusResult{}})
+	if got := m.bufs[k].slice(); len(got) != 1 || got[0] != "old line" {
+		t.Fatalf("buffer = %+v", got)
+	}
+
+	// 外部（MCP など）で switch が起きるとログパスが変わる。バッファは新ログの
+	// 内容だけになる。
+	m.applyResolved(resolvedMsg{selKey: k, path: newLog, status: &server.StatusResult{}})
+	if got := m.bufs[k].slice(); len(got) != 1 || got[0] != "new line" {
+		t.Fatalf("buffer after path change = %+v", got)
+	}
+}
+
+func TestFilterNarrowsRenderedLines(t *testing.T) {
+	m := newTestModel(t)
+	k := "feat-a\x00api/backend"
+	m.curKey = k
+	log := filepath.Join(t.TempDir(), "a.log")
+	os.WriteFile(log, []byte("GET /healthz 200\nERROR boom\nGET /users 200\n"), 0o644)
+	m.applyResolved(resolvedMsg{selKey: k, path: log, status: &server.StatusResult{}})
+
+	m.filter = "error"
+	m.rebuildLog()
+	if view := m.vp.View(); !strings.Contains(view, "boom") || strings.Contains(view, "healthz") {
+		t.Fatalf("filtered view = %q", view)
+	}
+}
+
+// 上方向のスクロールは追従を解除し、f で再開する（ログペインにフォーカス時）。
+func TestScrollDisablesFollow(t *testing.T) {
+	m := newTestModel(t)
+	m.focus = focusLog
+	if !m.follow {
+		t.Fatal("follow must start enabled")
+	}
+	m.Update(key("k"))
+	if m.follow {
+		t.Fatal("scrolling up must disable follow")
+	}
+	m.Update(key("f"))
+	if !m.follow {
+		t.Fatal("'f' must re-enable follow")
+	}
+}
+
+// B2: 新しい seq の path 適用後、古い seq の missing=true が届いてもバッファは消えない
+// （発行順の世代で古い解決を弾く）。
 func TestApplyResolvedIgnoresStaleSeq(t *testing.T) {
 	m := newTestModel(t)
+	log := filepath.Join(t.TempDir(), "a.log")
+	os.WriteFile(log, []byte("live line\n"), 0o644)
+	k := "feat-a\x00api/backend"
+	m.curKey = k
 
-	// seq=2 の解決を適用（resolveApplied=2、status を採用）。
-	newStatus := &server.StatusResult{}
-	m.applyResolved(resolvedMsg{seq: 2, status: newStatus})
-	if m.resolveApplied != 2 {
-		t.Fatalf("resolveApplied = %d, want 2", m.resolveApplied)
-	}
-	if m.status != newStatus {
-		t.Fatal("seq=2 の status が採用されていない")
+	// seq=2 で path を適用（バッファ生成）。
+	m.applyResolved(resolvedMsg{seq: 2, selKey: k, path: log, status: &server.StatusResult{}})
+	if m.bufs[k] == nil || m.tails[k] == nil {
+		t.Fatal("path resolution must create a tailer and a buffer")
 	}
 
-	// 遅れて届いた古い seq=1 は無視され、status は上書きされない。
-	stale := &server.StatusResult{}
-	m.applyResolved(resolvedMsg{seq: 1, status: stale})
-	if m.status != newStatus {
-		t.Fatal("stale seq が status を上書きした")
+	// 遅れて届いた古い seq=1 の missing。無視されバッファ・tailer は残る。
+	m.applyResolved(resolvedMsg{seq: 1, selKey: k, missing: true, status: &server.StatusResult{}})
+	if m.bufs[k] == nil || m.tails[k] == nil {
+		t.Fatal("stale resolution must not delete tails/bufs")
+	}
+	if m.curMissing {
+		t.Fatal("stale missing must not mark the target missing")
+	}
+}
+
+// B3: ノードが消えると buildNodes が該当 key の tailer / バッファを掃除する
+// （worktree の作成→削除の繰り返しでリングが残り続けるのを防ぐ）。
+func TestBuildNodesEvictsGoneTargets(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg = serverCfg()
+	gone := "feat-a\x00api/backend"
+	m.tails[gone] = newTailer("/does-not-matter")
+	m.bufs[gone] = newRing(targetRingCap)
+	m.curKey = "" // 消える key を保護しない
+
+	// feat-a を含まない一覧で再構築 → gone のノードは存在しない。
+	m.trees = treesResult(tree.WorktreeRow{Name: "feat-b", Repos: []tree.RepoCell{{Repo: "api"}}})
+	m.buildNodes()
+
+	if _, ok := m.tails[gone]; ok {
+		t.Fatal("gone target tailer must be evicted")
+	}
+	if _, ok := m.bufs[gone]; ok {
+		t.Fatal("gone target buffer must be evicted")
+	}
+}
+
+// C5: follow オフで YOffset を進めた状態のリサイズは YOffset を保つ（作り直すと 0 に戻る）。
+func TestWindowResizePreservesYOffset(t *testing.T) {
+	m := newTestModel(t)
+	k := "feat-a\x00api/backend"
+	m.curKey = k
+	log := filepath.Join(t.TempDir(), "a.log")
+	var b strings.Builder
+	for i := 0; i < 200; i++ {
+		b.WriteString("line\n")
+	}
+	os.WriteFile(log, []byte(b.String()), 0o644)
+	m.applyResolved(resolvedMsg{selKey: k, path: log, status: &server.StatusResult{}})
+
+	m.focus = focusLog
+	m.follow = false
+	m.vp.SetYOffset(50)
+	off := m.vp.YOffset
+	if off == 0 {
+		t.Fatal("test setup: YOffset must be advanced")
+	}
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	if m.vp.YOffset != off {
+		t.Fatalf("resize must preserve YOffset, got %d want %d", m.vp.YOffset, off)
 	}
 }
