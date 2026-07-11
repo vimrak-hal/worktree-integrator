@@ -23,15 +23,18 @@ type keyMap struct {
 	Doctor kb.Binding
 
 	// --- ツリー（左ペイン） ---
-	Up       kb.Binding // 表示は "j/k 選択"（Down と対で 1 項目に見せる）
-	Down     kb.Binding
-	SwitchTo kb.Binding
-	Restart  kb.Binding
-	Stop     kb.Binding
-	New      kb.Binding
-	Delete   kb.Binding
-	Alias    kb.Binding
-	Refresh  kb.Binding
+	Up           kb.Binding // 表示は "j/k 選択"（Down と対で 1 項目に見せる）
+	Down         kb.Binding
+	Collapse     kb.Binding // worktree 見出しの折りたたみトグル（space）
+	NextWorktree kb.Binding // 次の worktree 見出しへ（J）
+	PrevWorktree kb.Binding // 前の worktree 見出しへ（K）
+	SwitchTo     kb.Binding
+	Restart      kb.Binding
+	Stop         kb.Binding
+	New          kb.Binding
+	Delete       kb.Binding
+	Alias        kb.Binding
+	Refresh      kb.Binding
 
 	// --- ログ（右ペイン） ---
 	Follow      kb.Binding
@@ -68,15 +71,20 @@ func newKeyMap() keyMap {
 		Focus:  kb.NewBinding(kb.WithKeys("tab", "left", "right", "h", "l"), kb.WithHelp("Tab", "ペイン切替")),
 		Doctor: kb.NewBinding(kb.WithKeys("!"), kb.WithHelp("!", "doctor")),
 
-		Up:       kb.NewBinding(kb.WithKeys("k", "up"), kb.WithHelp("j/k", "選択")),
-		Down:     kb.NewBinding(kb.WithKeys("j", "down"), kb.WithHelp("j/k", "選択")),
-		SwitchTo: kb.NewBinding(kb.WithKeys("enter", "s"), kb.WithHelp("Enter/s", "switch")),
-		Restart:  kb.NewBinding(kb.WithKeys("r"), kb.WithHelp("r", "再起動")),
-		Stop:     kb.NewBinding(kb.WithKeys("x"), kb.WithHelp("x", "stop")),
-		New:      kb.NewBinding(kb.WithKeys("n"), kb.WithHelp("n", "作成")),
-		Delete:   kb.NewBinding(kb.WithKeys("D"), kb.WithHelp("D", "削除")),
-		Alias:    kb.NewBinding(kb.WithKeys("a"), kb.WithHelp("a", "別名")),
-		Refresh:  kb.NewBinding(kb.WithKeys("R"), kb.WithHelp("R", "更新")),
+		Up:   kb.NewBinding(kb.WithKeys("k", "up"), kb.WithHelp("j/k", "選択")),
+		Down: kb.NewBinding(kb.WithKeys("j", "down"), kb.WithHelp("j/k", "選択")),
+		// Collapse の実効キーは半角スペース。KeyMsg.String() は KeySpace / スペース rune の
+		// どちらでも " " になるため、" " で一意に照合できる。
+		Collapse:     kb.NewBinding(kb.WithKeys(" "), kb.WithHelp("Space", "折りたたみ")),
+		NextWorktree: kb.NewBinding(kb.WithKeys("J"), kb.WithHelp("J/K", "wt 移動")),
+		PrevWorktree: kb.NewBinding(kb.WithKeys("K"), kb.WithHelp("J/K", "wt 移動")),
+		SwitchTo:     kb.NewBinding(kb.WithKeys("enter", "s"), kb.WithHelp("Enter/s", "switch")),
+		Restart:      kb.NewBinding(kb.WithKeys("r"), kb.WithHelp("r", "再起動")),
+		Stop:         kb.NewBinding(kb.WithKeys("x"), kb.WithHelp("x", "stop")),
+		New:          kb.NewBinding(kb.WithKeys("n"), kb.WithHelp("n", "作成")),
+		Delete:       kb.NewBinding(kb.WithKeys("D"), kb.WithHelp("D", "削除")),
+		Alias:        kb.NewBinding(kb.WithKeys("a"), kb.WithHelp("a", "別名")),
+		Refresh:      kb.NewBinding(kb.WithKeys("R"), kb.WithHelp("R", "更新")),
 
 		Follow:      kb.NewBinding(kb.WithKeys("f"), kb.WithHelp("f", "追従")),
 		Filter:      kb.NewBinding(kb.WithKeys("/"), kb.WithHelp("/", "フィルタ")),
@@ -174,7 +182,9 @@ func (m *model) contextBindings() []kb.Binding {
 	}
 	if m.focus == focusTree {
 		return []kb.Binding{
-			m.keys.Up, // "j/k 選択"
+			m.keys.Up,           // "j/k 選択"
+			m.keys.NextWorktree, // "J/K wt 移動"（見出し間ジャンプ。Prev と対で 1 項目に見せる）
+			m.keys.Collapse,     // "Space 折りたたみ"
 			m.keys.SwitchTo,
 			m.keys.Restart,
 			m.keys.Stop,
