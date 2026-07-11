@@ -13,6 +13,9 @@ const (
 	colorRunning = lipgloss.Color("2") // 緑: 稼働中
 	colorWarn    = lipgloss.Color("3") // 黄: 警告
 	colorAccent  = lipgloss.Color("6") // シアン: 強調・フォーカス
+	// colorMuted は明るい黒（グレー）。ANSI 16 色の範囲内。faint(SGR 2) は端末により
+	// 減光されず視覚差が出ないため、非フォーカスの枠は faint ではなくこの明示的な色で示す。
+	colorMuted = lipgloss.Color("8") // 明るい黒（グレー）: 非フォーカスの枠・見出し
 )
 
 // スタイルは基本 16 色（ANSI）だけを使う。dev サーバーのログを見る端末は多様で
@@ -32,14 +35,16 @@ var (
 	styMarkCrashed = lipgloss.NewStyle().Foreground(colorError)
 	styMarkStopped = lipgloss.NewStyle().Faint(true)
 
-	// ペインの角丸ボーダー。フォーカス側は colorAccent、非フォーカス側は faint。
-	// どちらのペインを操作しているかをボーダー色で示す（反転は使わない）。
-	styBorder      = lipgloss.NewStyle().Faint(true)
+	// ペインの角丸ボーダー。フォーカス側は colorAccent、非フォーカス側は colorMuted。
+	// どちらのペインを操作しているかをボーダー色で示す（反転は使わない）。非フォーカスは
+	// faint(SGR 2) だと減光しない端末で区別が見えないため、明示的な色（グレー）で描く。
+	styBorder      = lipgloss.NewStyle().Foreground(colorMuted)
 	styBorderFocus = lipgloss.NewStyle().Foreground(colorAccent)
 
 	// ペイン見出し（上辺のボーダーへ埋め込む文字列）。フォーカス側は colorAccent+太字、
-	// 非フォーカス側は faint。ボーダー色と揃えてフォーカスを一目で分かるようにする。
-	styPaneTitle      = lipgloss.NewStyle().Faint(true)
+	// 非フォーカス側は colorMuted。ボーダー色と揃えてフォーカスを一目で分かるようにする
+	// （非フォーカスは faint ではなく明示的な色。二重にすると余計に環境差が出る）。
+	styPaneTitle      = lipgloss.NewStyle().Foreground(colorMuted)
 	styPaneTitleFocus = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 
 	// ツリーの選択行。反転はやめ、行頭に colorAccent の ▌ インジケータを立て、行本文は

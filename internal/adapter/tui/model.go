@@ -198,11 +198,12 @@ type model struct {
 	spin spinner.Model
 	// quitAfterOp は操作中に終了要求があったことを表す（完了を待って終了する）。
 	quitAfterOp bool
-	// events はライフサイクル・作成進捗のイベント履歴。フッターには直近
-	// visibleEvents 件を時系列（上が古い順）で表示する。
+	// events はライフサイクル・作成進捗のイベント履歴。左カラム下のイベントボックスへ
+	// 直近 visibleEvents 件を時系列（新しいものが下）で表示する。
 	events []string
 
-	// note はフッターの一時メッセージ（直近の操作結果・警告）。
+	// note は状態行の一時メッセージ（直近の操作結果・警告）。イベントボックスの
+	// 1 行目（退避時はツリーボックス最下行）に出る。
 	note    string
 	noteErr bool
 }

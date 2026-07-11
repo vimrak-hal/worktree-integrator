@@ -8,15 +8,19 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// visibleEvents は左ペインのフッターに表示するイベント履歴の行数。フッターを短く保ち、
-// ノード一覧の領域を潰さないための上限。
+// visibleEvents はイベントボックスに表示するイベント履歴の行数。
 const visibleEvents = 6
 
-// View は現在のモデルを 1 画面に描画する。レイアウトは lazygit / charm 風の 2 ペイン:
-// 左（ツリー）と右（ログ／doctor 結果／フォーム）をそれぞれ角丸ボーダーで囲み、見出しは
-// 上辺のボーダーに埋め込む。フォーカス中のペインはボーダー色（colorAccent）で示す。各
-// ボーダーは左右 2 桁・上下 2 行を消費する。ヘルプ行だけはボーダーの外、画面最下に置く。
-// note（一時メッセージ）・実行中表示・イベント履歴は左ペインのボーダー内に収める。
+// eventBoxInnerH はイベントボックスの内側高さ（固定）。1 行目の状態行 + 直近イベント
+// visibleEvents 行。固定にすることでイベント件数が増減してもレイアウトが揺れない。
+const eventBoxInnerH = 1 + visibleEvents
+
+// View は現在のモデルを 1 画面に描画する。レイアウトは lazygit / charm 風の 2 カラム:
+// 左カラムは上「WORKTREES」（ツリーノード）+ 下「イベント」の 2 ボックスを縦積みにし、
+// 右カラム（ログ／doctor 結果／フォーム）は全高 1 ボックス。それぞれ角丸ボーダーで囲み、
+// 見出しは上辺のボーダーに埋め込む。フォーカス中のペインはボーダー色（colorAccent）で
+// 示す（イベントボックスはフォーカス対象にせず常に非フォーカス色）。各ボーダーは左右
+// 2 桁・上下 2 行を消費する。ヘルプ行だけはボーダーの外、画面最下に置く。
 func (m *model) View() string {
 	if !m.ready {
 		return "起動中…"
@@ -29,7 +33,7 @@ func (m *model) View() string {
 	rightInner := max(1, rightBoxW-2)
 	innerH := max(1, m.height-3)
 
-	leftBox := m.renderBox(m.leftTitle(), m.treeLines(innerH), leftInner, innerH, m.focus == focusTree)
+	leftBox := m.leftColumn(leftInner, innerH)
 	rightBox := m.renderBox(m.logTitle(), m.rightLines(), rightInner, innerH, m.focus == focusLog)
 
 	var b strings.Builder
@@ -159,34 +163,69 @@ func (m *model) logPills() string {
 	return strings.Join(pills, " ")
 }
 
-// treeLines は左ペインの行を組む: スクロールするノード一覧の下に、実行中表示と直近の
-// イベント履歴を固定で置く。
-func (m *model) treeLines(h int) []string {
-	// 下部に置くフッター（空行 + 状態行 + イベント）を先に組み、残りをノード領域にする。
-	// すべて左ペインのボーダー内に収める。状態行は 1 枠で、実行中はスピナー付きの
-	// 「実行中: …」を、そうでなければ直近の一時メッセージ（note）を出す（startOp で
-	// note はクリアされるため両者は時間的に排他）。
-	footer := []string{""}
+// leftColumn は左カラム（WORKTREES + イベント の 2 ボックスを縦積み）を組み、右ボックスと
+// 行数を揃えるため innerH+2 行を返す。イベントボックスは内側高さ固定（eventBoxInnerH）で、
+// 残りがツリーボックスになる。端末が低くツリー本体に最低 3 行を確保できないときは退避して
+// イベントボックスを出さず、従来どおりツリーボックスのみ（状態行はツリー最下行へ、イベント
+// は非表示）にする。イベントボックスはフォーカス対象にしないため常に非フォーカス色で描く。
+func (m *model) leftColumn(innerW, innerH int) []string {
+	// 左カラム全体は右ボックスと同じ innerH+2 行を占める。イベントボックス（上下ボーダー
+	// 込みで eventBoxInnerH+2 行）を引いた残りがツリーボックスの領域。
+	treeInnerH := innerH - eventBoxInnerH - 2
+	// 退避: イベントボックス + ツリー最低 3 行を確保できないときはツリーボックスのみ。
+	if treeInnerH < 3 {
+		return m.renderBox(m.leftTitle(), m.treeOnlyLines(innerH), innerW, innerH, m.focus == focusTree)
+	}
+	treeBox := m.renderBox(m.leftTitle(), m.visibleNodeLines(treeInnerH), innerW, treeInnerH, m.focus == focusTree)
+	eventBox := m.renderBox(m.eventTitle(), m.eventLines(), innerW, eventBoxInnerH, false)
+	return append(treeBox, eventBox...)
+}
+
+// eventTitle はイベントボックスの見出し。イベントボックスはフォーカス対象にしないため
+// 常に非フォーカス色で描く。
+func (m *model) eventTitle() string {
+	return styPaneTitle.Render("イベント")
+}
+
+// statusLine は状態行を返す: 実行中はスピナー付きの「実行中: …」を、そうでなければ直近の
+// 一時メッセージ（note）を出す（startOp で note はクリアされるため両者は時間的に排他）。
+// どちらも無ければ空文字。
+func (m *model) statusLine() string {
 	switch {
 	case m.opRunning:
 		// MiniDot のスピナーを colorAccent で先頭に回す（実行中のみ tick を回す）。
-		footer = append(footer, m.spin.View()+" "+styNote.Render("実行中: "+m.opLabel+" …"))
+		return m.spin.View() + " " + styNote.Render("実行中: "+m.opLabel+" …")
 	case m.note != "":
-		footer = append(footer, m.noteLine())
+		return m.noteLine()
+	default:
+		return ""
 	}
-	if len(m.events) > 0 {
-		footer = append(footer, styHelp.Render("── イベント ──"))
-		ev := m.events
-		if len(ev) > visibleEvents {
-			ev = ev[len(ev)-visibleEvents:]
-		}
-		footer = append(footer, ev...)
-	}
-	if len(footer) > h {
-		footer = footer[:h]
-	}
-	nodeAreaH := max(1, h-len(footer))
+}
 
+// eventLines はイベントボックスの内側（1 + visibleEvents 行）を組む: 1 行目に状態行、続けて
+// 直近のイベント（新しいものが下）。不足行は renderBox が空白で埋めるためここでは詰めない。
+func (m *model) eventLines() []string {
+	out := []string{m.statusLine()}
+	ev := m.events
+	if len(ev) > visibleEvents {
+		ev = ev[len(ev)-visibleEvents:]
+	}
+	return append(out, ev...)
+}
+
+// treeOnlyLines は退避時のツリーボックス内側を h 行で返す: ノードで埋め、状態行があれば
+// 最下行に置く（イベントは非表示）。
+func (m *model) treeOnlyLines(h int) []string {
+	status := m.statusLine()
+	if status == "" {
+		return m.visibleNodeLines(h)
+	}
+	return append(m.visibleNodeLines(max(1, h-1)), status)
+}
+
+// visibleNodeLines はツリーのノード行を組み、選択行が可視域に入るようスクロールして
+// area 行ぶんへ切り詰め・空白パディングして返す（フッター合成は含まない）。
+func (m *model) visibleNodeLines(area int) []string {
 	var nodeLines []string
 	switch {
 	case m.treesErr != "":
@@ -202,20 +241,20 @@ func (m *model) treeLines(h int) []string {
 		}
 	}
 
-	m.adjustTreeTop(len(nodeLines), nodeAreaH)
+	m.adjustTreeTop(len(nodeLines), area)
 	visible := nodeLines
 	if m.treeTop < len(visible) {
 		visible = visible[m.treeTop:]
 	} else {
 		visible = nil
 	}
-	if len(visible) > nodeAreaH {
-		visible = visible[:nodeAreaH]
+	if len(visible) > area {
+		visible = visible[:area]
 	}
-	for len(visible) < nodeAreaH {
+	for len(visible) < area {
 		visible = append(visible, "")
 	}
-	return append(visible, footer...)
+	return visible
 }
 
 // adjustTreeTop は sel が可視域（treeTop..treeTop+viewH）に入るようスクロール位置を

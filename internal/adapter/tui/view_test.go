@@ -6,12 +6,14 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/app/tree"
 )
 
-// 2 ペインはそれぞれ角丸ボーダーで囲まれ、見出しは上辺に埋め込まれる。左にツリーの
-// ノード名、右にログ行が同時に描かれる。選択行には ▌ インジケータが立つ。
+// 左カラムは WORKTREES とイベントの 2 ボックスが縦積みになり、右カラムはログの全高
+// ボックス。見出しは各上辺に埋め込まれる。左にツリーのノード名、右にログ行が同時に
+// 描かれる。選択行には ▌ インジケータが立つ。
 func TestViewShowsBothPanes(t *testing.T) {
 	m := newTestModel(t)
 	m.cfg = serverCfg()
@@ -27,7 +29,8 @@ func TestViewShowsBothPanes(t *testing.T) {
 		"feat-a",         // ツリーの worktree 見出し
 		"api/backend",    // 右ペインのログ見出しに埋め込まれた対象
 		"hello-log-line", // ビューポートのログ本文
-		"WORKTREES",      // 左ペイン見出し（上辺に埋め込み）
+		"WORKTREES",      // 左カラム上ボックスの見出し（上辺に埋め込み）
+		"イベント",           // 左カラム下ボックスの見出し（上辺に埋め込み）
 		"╭",              // 角丸ボーダーの上辺
 		"╰",              // 角丸ボーダーの下辺
 		"│",              // ボーダーの側辺
@@ -36,6 +39,104 @@ func TestViewShowsBothPanes(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Errorf("view missing %q", want)
 		}
+	}
+}
+
+// イベントが発生すると左カラム下のイベントボックスへ行が出る。状態行（note）も
+// イベントボックスの 1 行目に出る。
+func TestEventBoxShowsEvents(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg = serverCfg()
+	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}}})
+	m.buildNodes()
+	m.events = []string{"created feat-a", "switched to backend"}
+	m.note = "作成しました"
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	evHead := -1
+	for i, ln := range lines {
+		if strings.Contains(ln, "イベント") {
+			evHead = i
+			break
+		}
+	}
+	if evHead < 0 {
+		t.Fatal("イベントボックスの見出しが無い")
+	}
+	// 状態行とイベント行はイベントボックスの見出しより後の行に出る（下ボックス内）。
+	for _, want := range []string{"作成しました", "created feat-a", "switched to backend"} {
+		found := false
+		for _, ln := range lines[evHead+1:] {
+			if strings.Contains(ln, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("イベントボックス内に %q が出ていない", want)
+		}
+	}
+}
+
+// 端末が低いときはイベントボックスを出さず、従来どおりツリーボックスのみにする（状態行は
+// ツリー最下行へ退避、イベントは非表示）。この間もツリーの選択・スクロールは機能し panic
+// しない。
+func TestLowTerminalHidesEventBox(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg = serverCfg()
+	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}},
+		Servers: []tree.ServerCell{{Repo: "api", Server: "backend", Pid: 4242}}})
+	m.buildNodes()
+	m.events = []string{"created feat-a"}
+	m.note = "作成しました"
+	// イベントボックス + ツリー最低 3 行を確保できない低い端末。
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 10})
+
+	view := m.View()
+	if strings.Contains(view, "イベント") {
+		t.Error("低い端末ではイベントボックスの見出しを出さない")
+	}
+	if strings.Contains(view, "created feat-a") {
+		t.Error("低い端末ではイベントを表示しない")
+	}
+	if !strings.Contains(view, "WORKTREES") {
+		t.Error("低い端末でもツリーボックスは出る")
+	}
+	if !strings.Contains(view, "feat-a") {
+		t.Error("低い端末でもツリーノードが機能する")
+	}
+	// 状態行はツリーボックス最下行へ退避する。
+	if !strings.Contains(view, "作成しました") {
+		t.Error("退避時、状態行がツリーボックスに出ていない")
+	}
+	// 選択移動しても panic せず非空を返す。
+	m.Update(key("j"))
+	if m.View() == "" {
+		t.Error("低い端末で選択移動後の View が空")
+	}
+}
+
+// 非フォーカスの枠・見出しは faint(SGR 2) ではなく色 8（明るい黒＝グレー）で描く。
+// faint は減光しない端末が多くフォーカス差が見えないため、明示的な色にした回帰テスト。
+func TestNonFocusBorderUsesColor8(t *testing.T) {
+	old := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI)
+	defer lipgloss.SetColorProfile(old)
+
+	border := styBorder.Render("│")
+	if !strings.Contains(border, "\x1b[90m") {
+		t.Errorf("非フォーカスボーダーは色 8（\\x1b[90m）で描くべき: %q", border)
+	}
+	if strings.Contains(border, "\x1b[2m") {
+		t.Errorf("非フォーカスボーダーに faint（SGR 2）を使ってはいけない: %q", border)
+	}
+	title := styPaneTitle.Render("イベント")
+	if !strings.Contains(title, "\x1b[90m") {
+		t.Errorf("非フォーカス見出しは色 8（\\x1b[90m）で描くべき: %q", title)
+	}
+	if strings.Contains(title, "\x1b[2m") {
+		t.Errorf("非フォーカス見出しに faint（SGR 2）を使ってはいけない: %q", title)
 	}
 }
 
