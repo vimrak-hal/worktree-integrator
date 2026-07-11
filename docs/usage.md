@@ -14,6 +14,7 @@ wt server logs   [<name>] [--repo <repo>]... [-n N] [-f] [--prev]
 wt alias set <name> <label> | wt alias list | wt alias remove <name>
 wt doctor [--fix] [--json]
 wt config check
+wt ui                    # 引数なしの `wt` でも開く
 wt mcp
 ```
 
@@ -189,6 +190,17 @@ wt config check
 無い場合は「既定値で動作します」と表示して exit 0、存在して正常なら exit 0、不正なら
 検証エラーを標準エラーへ出力して exit 1 です。CI で設定ファイルの妥当性だけを検査
 したい場合に使えます。
+
+## `ui` — ターミナル UI
+
+```sh
+wt ui   # 引数なしの `wt` だけでも同じ画面が開く
+```
+
+左のツリー（worktree → サーバー）で対象を選び、右でそのログを読む 2 ペインの
+対話 UI です。サーバーの切り替え・停止に加え、worktree の作成・削除・別名・
+doctor もこの画面から実行できます（すべて対応する CLI コマンドでも従来どおり
+操作できます）。詳細は [Terminal UI](tui.md) を参照してください。
 
 ## `mcp` — MCP サーバーとして起動
 

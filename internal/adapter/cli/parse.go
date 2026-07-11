@@ -20,7 +20,7 @@ import (
 )
 
 // Invocation はコマンドラインが表す起動要求である。封印された sum-type であり、
-// 実装は以下の 5 バリアントのみ。main はこれを網羅的な型スイッチでディスパッチする
+// 実装は以下のバリアントのみ。main はこれを網羅的な型スイッチでディスパッチする
 // （旧実装の「result==nil なら help 済み」という暗黙推論と ErrHelpShown センチネル、
 // runMCP bool 戻り値をこの単一チャネルに置き換えた）。
 type Invocation interface {
@@ -95,6 +95,11 @@ type Alias struct {
 // RunMCP は MCP サーバーとしての起動要求。ワークフローではなく実行モードである。
 type RunMCP struct{}
 
+// RunUI は TUI（端末 UI）としての起動要求。RunMCP と同じくワークフローではなく
+// 実行モードだが、設定と状態ルートを必要とするため main のディスパッチは App 構築の
+// 後になる（adapter/tui が TUI 専用の子プロセス IO・進捗通知で App を組み直す）。
+type RunUI struct{}
+
 // ConfigCheck は `wt config check` の起動要求。設定ファイルの検証結果に応じて
 // exit 0/1 を返す（main.runConfigCheck を参照）。App を必要としないため、
 // HelpShown / RunMCP と同様に main が dispatch の手前で直接処理する。
@@ -113,13 +118,15 @@ func (Repos) isInvocation()       {}
 func (Server) isInvocation()      {}
 func (Alias) isInvocation()       {}
 func (RunMCP) isInvocation()      {}
+func (RunUI) isInvocation()       {}
 func (ConfigCheck) isInvocation() {}
 func (HelpShown) isInvocation()   {}
 
 // Parse は args（プログラム名を除く）を Invocation へと解析する。サブコマンドのない
 // 素の `worktree-integrator <name>` の形式は `create <name>` として扱われる。素の名前が
 // 予約語（現行および将来のサブコマンド名）と衝突する場合は、`create` の明示を促す
-// エラーを返す。
+// エラーを返す。引数を一切与えない `worktree-integrator`（`wt`）は、lazygit などと
+// 同様に UI を開く（`wt ui` と同じ RunUI）。
 func Parse(args []string) (Invocation, error) {
 	// result はサブコマンドが解決するまで nil のまま。正常な Execute の後も nil で
 	// あれば、cobra が --help / --version（または未指定サブコマンドのヘルプ）を
@@ -133,7 +140,11 @@ func Parse(args []string) (Invocation, error) {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return fmt.Errorf("worktree 名を指定してください（例: worktree-integrator <name>）")
+			// lazygit などと同様、引数なしは最も対話的なフロントエンドである UI を
+			// 開く（`wt ui` と同一の RunUI 起動要求）。worktree 作成は素の名前
+			// （`wt <name>`）で従来どおり injectCreate が create へ回す。
+			result = RunUI{}
+			return nil
 		},
 	}
 	// そうしないと Cobra は `completion` サブコマンドを自動登録してしまい、
@@ -152,6 +163,7 @@ func Parse(args []string) (Invocation, error) {
 	addServer(root, &result)
 	addAlias(root, &result)
 	addMCP(root, &result)
+	addUI(root, &result)
 	addConfig(root, &result)
 
 	injected, err := injectCreate(args, valueFlags(createCmd))
@@ -465,6 +477,21 @@ func addConfig(root *cobra.Command, result *Invocation) {
 	root.AddCommand(cfg)
 }
 
+func addUI(root *cobra.Command, result *Invocation) {
+	cmd := &cobra.Command{
+		Use:   "ui",
+		Short: "Open the interactive terminal UI (server logs, status and worktree switching)",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			// TUI は実行モードであり、解決すべき Action を持たない（表示対象・設定は
+			// 実行中にティックごとに再解決される）。
+			*result = RunUI{}
+			return nil
+		},
+	}
+	root.AddCommand(cmd)
+}
+
 func addMCP(root *cobra.Command, result *Invocation) {
 	cmd := &cobra.Command{
 		Use:   "mcp",
@@ -501,7 +528,8 @@ func scopeFromArgs(args []string) (action.WorktreeScope, error) {
 // worktree は `create <name>` の明示で作成できる。
 var knownSubcommand = map[string]bool{
 	"create": true, "list": true, "enter": true, "remove": true, "doctor": true,
-	"repos": true, "server": true, "alias": true, "mcp": true, "config": true, "help": true,
+	"repos": true, "server": true, "alias": true, "mcp": true, "ui": true,
+	"config": true, "help": true,
 }
 
 // reservedSubcommand は、まだ実装されていないが将来のサブコマンドとして予約されている

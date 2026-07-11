@@ -4,13 +4,24 @@ import (
 	"errors"
 	"os"
 
-	"github.com/AlecAivazis/survey/v2"
-	"github.com/AlecAivazis/survey/v2/terminal"
+	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/core/git/repo"
 )
 
 const selectTitle = "Select repositories to create worktrees for"
+
+// selectTheme は SelectRepos のプロンプト配色。基本 16 色（ANSI）だけを使う
+// 既存の見た目に馴染ませるため huh.ThemeBase() を土台にし、フォーカス中の
+// タイトルだけをシアン（色 6）に寄せる（派手な色は使わない）。tui/forms.go の
+// formTheme と同じ発想だが、アダプタ間の依存を作らないため cli パッケージ内に
+// 独立して小さく定義する（tui からは import しない）。
+func selectTheme() *huh.Theme {
+	t := huh.ThemeBase()
+	t.Focused.Title = t.Focused.Title.Foreground(lipgloss.Color("6"))
+	return t
+}
 
 // InteractiveSelector は、stdin と stdout がともに端末である場合に SelectRepos を、
 // そうでなければ nil（非対話）を返す。main が App.Selector に注入し、非 TTY
@@ -30,6 +41,8 @@ func isTerminal(f *os.File) bool {
 }
 
 // ErrInterrupted は対話プロンプトが Ctrl-C で中断されたことを表す型付きエラー。
+// huh は中断時に huh.ErrUserAborted を返すため、SelectRepos が errors.Is で
+// これへ写像する。
 // 「空選択（何も選ばず Enter）＝ 何もしない正常終了」とは区別され、main が
 // exit 130 に写像する（シェルの 128+SIGINT 慣習。旧実装はキャンセルを空選択と
 // 同一視して exit 0 にしていたが、意図的な仕様変更として中断を中断のまま伝える）。
@@ -50,9 +63,16 @@ func SelectRepos(repos []repo.Repo) ([]repo.Repo, error) {
 	}
 
 	var selected []string
-	prompt := &survey.MultiSelect{Message: selectTitle, Options: names}
-	if err := survey.AskOne(prompt, &selected); err != nil {
-		if errors.Is(err, terminal.InterruptErr) {
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewMultiSelect[string]().
+				Title(selectTitle).
+				Options(huh.NewOptions(names...)...).
+				Value(&selected),
+		),
+	).WithTheme(selectTheme())
+	if err := form.Run(); err != nil {
+		if errors.Is(err, huh.ErrUserAborted) {
 			return nil, ErrInterrupted
 		}
 		return nil, err
