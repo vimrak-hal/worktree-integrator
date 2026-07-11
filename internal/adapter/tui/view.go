@@ -136,12 +136,14 @@ func (m *model) logTitle() string {
 }
 
 // logPills はログ見出しへ添えるフラグのピル（バッジ）列を組む。文字色のみで表現し
-// （背景色はテーマ追従のため使わない）、追従=緑・前世代/フィルタ=シアン・読取失敗=赤。
+// （背景色はテーマ追従のため使わない）、前世代/フィルタ=シアン・読取失敗=赤。
 // フィルタ入力中は textinput の生ビューをそのまま見せる。
+// 既定状態（末尾追従）にはバッジを出さない — 常時表示はノイズで、注意が要るのは
+// 上へスクロールして追従が切れている間だけなので、そのときだけ黄で示す。
 func (m *model) logPills() string {
 	var pills []string
-	if m.follow {
-		pills = append(pills, styPillRun.Render("[追従]"))
+	if !m.follow {
+		pills = append(pills, styPillWarn.Render("[追従停止]"))
 	}
 	if m.prev {
 		pills = append(pills, styPillAccent.Render("[前世代]"))

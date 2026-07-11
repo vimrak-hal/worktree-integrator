@@ -39,7 +39,8 @@ func TestViewShowsBothPanes(t *testing.T) {
 	}
 }
 
-// ログ見出しのフラグはピル（バッジ）として描かれる（追従など）。フォーカスは反転ではなく
+// ログ見出しのフラグはピル（バッジ）として描かれる。既定状態（末尾追従）はバッジを
+// 出さず、追従が切れている間だけ [追従停止] を出す。フォーカスは反転ではなく
 // ボーダー／見出しの色で表現するため、View に反転（\x1b[7m）を含めない。
 func TestViewLogPillsAndNoReverse(t *testing.T) {
 	m := newTestModel(t)
@@ -53,13 +54,20 @@ func TestViewLogPillsAndNoReverse(t *testing.T) {
 	m.rebuildLog()
 
 	view := m.View()
-	for _, want := range []string{"[追従]", "[前世代]"} {
-		if !strings.Contains(view, want) {
-			t.Errorf("ログ見出しにピル %q が無い", want)
-		}
+	if strings.Contains(view, "追従停止") {
+		t.Error("追従中（既定状態）に [追従停止] が出ている")
+	}
+	if !strings.Contains(view, "[前世代]") {
+		t.Error("ログ見出しにピル [前世代] が無い")
 	}
 	if strings.Contains(view, "\x1b[7m") {
 		t.Error("リデザイン後の View は反転（\\x1b[7m）を使わない")
+	}
+
+	m.follow = false
+	view = m.View()
+	if !strings.Contains(view, "[追従停止]") {
+		t.Error("追従を解除しても [追従停止] が出ない")
 	}
 }
 

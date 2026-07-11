@@ -47,9 +47,9 @@ var (
 	stySelIndicator = lipgloss.NewStyle().Foreground(colorAccent)
 	stySelText      = lipgloss.NewStyle().Bold(true)
 
-	// ログ見出しのフラグを表すピル（バッジ）。背景色は使わず文字色のみ: 追従=緑、
+	// ログ見出しのフラグを表すピル（バッジ）。背景色は使わず文字色のみ: 追従停止=黄、
 	// 前世代/フィルタ=シアン、読取失敗=赤。
-	styPillRun    = lipgloss.NewStyle().Foreground(colorRunning)
+	styPillWarn   = lipgloss.NewStyle().Foreground(colorWarn)
 	styPillAccent = lipgloss.NewStyle().Foreground(colorAccent)
 	styPillError  = lipgloss.NewStyle().Foreground(colorError)
 )
