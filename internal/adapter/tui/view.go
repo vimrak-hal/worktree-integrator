@@ -34,7 +34,7 @@ func (m *model) View() string {
 	innerH := max(1, m.height-3)
 
 	leftBox := m.leftColumn(leftInner, innerH)
-	rightBox := m.renderBox(m.logTitle(), m.rightLines(), rightInner, innerH, m.focus == focusLog)
+	rightBox := m.renderBox(m.logTitle(), m.rightLines(), rightInner, innerH, m.rightFocused())
 
 	var b strings.Builder
 	for i := range leftBox {
@@ -92,15 +92,30 @@ func borderTop(title string, innerW int, sty lipgloss.Style) string {
 	return sty.Render("╭─ ") + t + sty.Render(" "+strings.Repeat("─", rest)+"╮")
 }
 
+// rightFocused は「入力が右ペインへ向かっているか」を返す。フォーム・doctor 結果の
+// 表示中はキーが右ペインの内容（huh / スクロール）に届くため、m.focus がツリーの
+// ままでも右の枠を光らせる。枠の色は m.focus そのものではなく「いまキーがどこへ
+// 効くか」を示す。
+func (m *model) rightFocused() bool {
+	return m.form != nil || m.doctorMode || m.focus == focusLog
+}
+
+// leftFocused は「入力がツリーへ向かっているか」を返す。フォーム・doctor 表示中は
+// キーがツリーに届かないため、rightFocused と排他になるようこちらは消灯する。
+func (m *model) leftFocused() bool {
+	return m.form == nil && !m.doctorMode && m.focus == focusTree
+}
+
 // leftTitle は左ペインの見出し。
 func (m *model) leftTitle() string {
-	return m.paneTitle("WORKTREES", focusTree)
+	return m.paneTitle("WORKTREES", m.leftFocused())
 }
 
 // paneTitle はペイン見出しを、フォーカスの有無で色分けして描く（フォーカス=colorAccent+
-// 太字、非フォーカス=faint）。ボーダー色と揃えてフォーカスを示す。
-func (m *model) paneTitle(label string, f focusID) string {
-	if m.focus == f {
+// 太字、非フォーカス=グレー）。ボーダー色（leftFocused/rightFocused）と同じ判定を
+// 渡して枠と見出しの色を常に一致させる。
+func (m *model) paneTitle(label string, focused bool) string {
+	if focused {
 		return styPaneTitleFocus.Render(label)
 	}
 	return styPaneTitle.Render(label)
@@ -121,10 +136,10 @@ func (m *model) logTitle() string {
 		case formRemove:
 			label = "削除の確認"
 		}
-		return m.paneTitle(label, focusLog)
+		return m.paneTitle(label, m.rightFocused())
 	}
 	if m.doctorMode {
-		return m.paneTitle("doctor 結果", focusLog)
+		return m.paneTitle("doctor 結果", m.rightFocused())
 	}
 	label := "ログ"
 	if m.curKey != "" {
@@ -132,7 +147,7 @@ func (m *model) logTitle() string {
 			label = fmt.Sprintf("ログ: %s/%s @ %s", repo, srv, wt)
 		}
 	}
-	title := m.paneTitle(label, focusLog)
+	title := m.paneTitle(label, m.rightFocused())
 	if pills := m.logPills(); pills != "" {
 		title += " " + pills
 	}
@@ -174,9 +189,9 @@ func (m *model) leftColumn(innerW, innerH int) []string {
 	treeInnerH := innerH - eventBoxInnerH - 2
 	// 退避: イベントボックス + ツリー最低 3 行を確保できないときはツリーボックスのみ。
 	if treeInnerH < 3 {
-		return m.renderBox(m.leftTitle(), m.treeOnlyLines(innerH), innerW, innerH, m.focus == focusTree)
+		return m.renderBox(m.leftTitle(), m.treeOnlyLines(innerH), innerW, innerH, m.leftFocused())
 	}
-	treeBox := m.renderBox(m.leftTitle(), m.visibleNodeLines(treeInnerH), innerW, treeInnerH, m.focus == focusTree)
+	treeBox := m.renderBox(m.leftTitle(), m.visibleNodeLines(treeInnerH), innerW, treeInnerH, m.leftFocused())
 	eventBox := m.renderBox(m.eventTitle(), m.eventLines(), innerW, eventBoxInnerH, false)
 	return append(treeBox, eventBox...)
 }

@@ -291,3 +291,28 @@ func TestDoctorModeShowsResult(t *testing.T) {
 		t.Error("doctor 結果の見出しが表示されていない")
 	}
 }
+
+// フォーム表示中は入力が右ペインへ向かうため、m.focus がツリーのままでも右の枠が
+// フォーカス色になり、左の枠は消灯する（枠は「いまキーがどこへ効くか」を示す）。
+func TestFormFocusLightsRightPane(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg = serverCfg()
+	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}}})
+	m.buildNodes()
+	if m.rightFocused() || !m.leftFocused() {
+		t.Fatal("初期状態はツリー点灯・右消灯のはず")
+	}
+	m.form = newAliasForm(new(string), 40)
+	m.formKind = formAlias
+	if !m.rightFocused() {
+		t.Error("フォーム表示中は右ペインの枠が点灯するべき")
+	}
+	if m.leftFocused() {
+		t.Error("フォーム表示中は左ペインの枠が消灯するべき")
+	}
+	m.form, m.formKind = nil, formNone
+	m.doctorMode = true
+	if !m.rightFocused() || m.leftFocused() {
+		t.Error("doctor 表示中も右点灯・左消灯であるべき")
+	}
+}
