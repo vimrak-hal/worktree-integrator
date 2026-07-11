@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 )
 
@@ -14,9 +15,7 @@ func (m *model) View() string {
 	lw := m.leftW()
 	bodyH := max(1, m.height-3)
 
-	// 左右ペインの中身は後続（A2: ツリー表示 / #7: ログペイン）で追加するため、この段では
-	// プレースホルダ文言のみを描く。
-	left := []string{"worktree がありません"}
+	left := m.treeLines(bodyH)
 	right := m.rightLines()
 	body := joinPanes(left, right, lw, bodyH)
 	for i := range body {
@@ -55,6 +54,109 @@ func (m *model) paneTitle(label string, f focusID) string {
 // プレースホルダのみを描く。
 func (m *model) logTitle() string {
 	return m.paneTitle(" ログ ", focusLog)
+}
+
+// treeLines は左ペインの行を組む: スクロールするノード一覧の下に空行のフッターを置く。
+func (m *model) treeLines(h int) []string {
+	// 下部に置くフッター（空行）を先に組み、残りをノード領域にする。
+	footer := []string{""}
+	if len(footer) > h {
+		footer = footer[:h]
+	}
+	nodeAreaH := max(1, h-len(footer))
+
+	var nodeLines []string
+	switch {
+	case m.treesErr != "":
+		nodeLines = []string{styErrNote.Render("取得失敗: " + m.treesErr)}
+	case m.trees == nil:
+		nodeLines = []string{"読み込み中…"}
+	case len(m.nodes) == 0:
+		nodeLines = []string{"worktree がありません"}
+	default:
+		nodeLines = make([]string, len(m.nodes))
+		for i, n := range m.nodes {
+			nodeLines[i] = m.nodeLine(i, n)
+		}
+	}
+
+	m.adjustTreeTop(len(nodeLines), nodeAreaH)
+	visible := nodeLines
+	if m.treeTop < len(visible) {
+		visible = visible[m.treeTop:]
+	} else {
+		visible = nil
+	}
+	if len(visible) > nodeAreaH {
+		visible = visible[:nodeAreaH]
+	}
+	for len(visible) < nodeAreaH {
+		visible = append(visible, "")
+	}
+	return append(visible, footer...)
+}
+
+// adjustTreeTop は sel が可視域（treeTop..treeTop+viewH）に入るようスクロール位置を
+// 詰める。ノード数が領域に満たなければ先頭に固定する。
+func (m *model) adjustTreeTop(total, viewH int) {
+	if m.sel < m.treeTop {
+		m.treeTop = m.sel
+	}
+	if m.sel >= m.treeTop+viewH {
+		m.treeTop = m.sel - viewH + 1
+	}
+	m.treeTop = clamp(m.treeTop, 0, max(0, total-viewH))
+}
+
+// nodeLine は 1 ノードを描く。選択行は色付けを諦めてプレーン文字列を組んでから全体を
+// 反転する（マークの色との共存を避ける）。非選択のサーバーノードはマークを色付けする。
+func (m *model) nodeLine(i int, n node) string {
+	if n.isWorktree() {
+		text := "▾ " + n.wt
+		if n.alias != "" {
+			text += " (" + n.alias + ")"
+		}
+		if n.broken {
+			text += " (!)"
+		}
+		if i == m.sel {
+			return stySelected.Render(text)
+		}
+		return text
+	}
+
+	suffix := n.repo + "/" + n.server
+	if n.running && n.pid != 0 {
+		suffix += " :" + strconv.Itoa(n.pid)
+	}
+	if i == m.sel {
+		return stySelected.Render("  " + markGlyph(n) + " " + suffix)
+	}
+	return "  " + markColored(n) + " " + suffix
+}
+
+// markGlyph は無色のマーク記号（選択行用）。
+func markGlyph(n node) string {
+	switch {
+	case n.running:
+		return "●"
+	case n.crashed:
+		return "✗"
+	default:
+		return "○"
+	}
+}
+
+// markColored は色付きのマーク記号（非選択行用）。
+func markColored(n node) string {
+	switch {
+	case n.running:
+		return styMarkRunning.Render("●")
+	case n.crashed:
+		return styMarkCrashed.Render("✗")
+	default:
+		return styMarkStopped.Render("○")
+	}
 }
 
 // rightLines は右ペインの行を返す。ログペイン本体は後続で追加するため、この段では

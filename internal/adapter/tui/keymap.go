@@ -13,12 +13,19 @@ import (
 type keyMap struct {
 	// --- 共通（フォーカスやプロンプトに依らず効く） ---
 	Quit kb.Binding
+
+	// --- ツリー（左ペイン） ---
+	Up   kb.Binding // 表示は "j/k 選択"（Down と対で 1 項目に見せる）
+	Down kb.Binding
 }
 
 // newKeyMap は全バインドを構築する。
 func newKeyMap() keyMap {
 	return keyMap{
 		Quit: kb.NewBinding(kb.WithKeys("q"), kb.WithHelp("q", "終了")),
+
+		Up:   kb.NewBinding(kb.WithKeys("k", "up"), kb.WithHelp("j/k", "選択")),
+		Down: kb.NewBinding(kb.WithKeys("j", "down"), kb.WithHelp("j/k", "選択")),
 	}
 }
 
@@ -38,6 +45,7 @@ func newHelp() help.Model {
 // ラベルは移行前の helpLine を踏襲する。
 func (m *model) contextBindings() []kb.Binding {
 	return []kb.Binding{
+		m.keys.Up, // "j/k 選択"
 		m.keys.Quit,
 	}
 }
