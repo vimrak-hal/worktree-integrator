@@ -4,12 +4,14 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/app/tree"
 )
 
-// 2 ペインは 1 画面にツリーのノード名とログ行を "│" 区切りで同時に描く。
+// 2 ペインはそれぞれ角丸ボーダーで囲まれ、見出しは上辺に埋め込まれる。左にツリーの
+// ノード名、右にログ行が同時に描かれる。選択行には ▌ インジケータが立つ。
 func TestViewShowsBothPanes(t *testing.T) {
 	m := newTestModel(t)
 	m.cfg = serverCfg()
@@ -21,15 +23,72 @@ func TestViewShowsBothPanes(t *testing.T) {
 	m.rebuildLog()
 
 	view := m.View()
-	for _, want := range []string{"feat-a", "api/backend", "hello-log-line", "│"} {
+	for _, want := range []string{
+		"feat-a",         // ツリーの worktree 見出し
+		"api/backend",    // 右ペインのログ見出しに埋め込まれた対象
+		"hello-log-line", // ビューポートのログ本文
+		"WORKTREES",      // 左ペイン見出し（上辺に埋め込み）
+		"╭",              // 角丸ボーダーの上辺
+		"╰",              // 角丸ボーダーの下辺
+		"│",              // ボーダーの側辺
+		"▌",              // 選択行のインジケータ（sel=0 の feat-a 見出し）
+	} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view missing %q", want)
 		}
 	}
 }
 
+// ログ見出しのフラグはピル（バッジ）として描かれる（追従など）。フォーカスは反転ではなく
+// ボーダー／見出しの色で表現するため、View に反転（\x1b[7m）を含めない。
+func TestViewLogPillsAndNoReverse(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg = serverCfg()
+	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}}})
+	m.buildNodes()
+	m.curKey = "feat-a\x00api/backend"
+	m.bufs[m.curKey] = newRing(10)
+	m.follow = true
+	m.prev = true
+	m.rebuildLog()
+
+	view := m.View()
+	for _, want := range []string{"[追従]", "[前世代]"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("ログ見出しにピル %q が無い", want)
+		}
+	}
+	if strings.Contains(view, "\x1b[7m") {
+		t.Error("リデザイン後の View は反転（\\x1b[7m）を使わない")
+	}
+}
+
+// 超狭小端末（幅 20×高さ 5 など）でも View は panic せず、非空の文字列を返す。負の
+// repeat・範囲外スライスを防いでいることの回帰テスト。
+func TestViewTinyTerminalNoPanic(t *testing.T) {
+	for _, sz := range []struct{ w, h int }{
+		{20, 5}, {1, 1}, {2, 3}, {10, 2}, {40, 1},
+	} {
+		m := newTestModel(t)
+		m.cfg = serverCfg()
+		m.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}},
+			Servers: []tree.ServerCell{{Repo: "api", Server: "backend", Pid: 4242}}})
+		m.buildNodes()
+		m.curKey = "feat-a\x00api/backend"
+		m.bufs[m.curKey] = newRing(10)
+		m.bufs[m.curKey].push("some-log-line")
+		m.opRunning = true // フッターのスピナー行も含めて描く
+		m.note = "とても長い一時メッセージが狭い左ペインでも panic しないこと"
+		m.Update(tea.WindowSizeMsg{Width: sz.w, Height: sz.h})
+		if got := m.View(); got == "" {
+			t.Errorf("View(%dx%d) は非空を返すべき", sz.w, sz.h)
+		}
+	}
+}
+
 // 折りたたみ見出しは ▸ グリフと、配下サーバーの状態を集約したマーク（0 件は非表示）を
-// 右に付ける。選択行は無色、非選択行は状態色付きで組む（どちらも数え上げは同じ）。
+// 右に付ける。選択行は行頭に ▌ インジケータを立てて本文を太字にし、非選択行は行頭 1 桁の
+// 空白で整列する。集約マークは選択・非選択のどちらも状態色を保つ（数え上げは同じ）。
 func TestCollapsedHeadingAggregateMarks(t *testing.T) {
 	m := newTestModel(t)
 	m.cfg = serverCfg()
@@ -44,10 +103,10 @@ func TestCollapsedHeadingAggregateMarks(t *testing.T) {
 		t.Fatalf("明示折りたたみで見出しのみになるべき: %+v", m.nodes)
 	}
 
-	// 選択行（無色・反転）: ▸ と 稼働1・停止1 の集約。0 件のクラッシュは出ない。
+	// 選択行: 行頭に ▌ インジケータ、▸ と 稼働1・停止1 の集約。0 件のクラッシュは出ない。
 	m.sel = 0
 	sel := m.nodeLine(0, m.nodes[0])
-	for _, want := range []string{"▸", "feat-x", "●1", "○1"} {
+	for _, want := range []string{"▌", "▸", "feat-x", "●1", "○1"} {
 		if !strings.Contains(sel, want) {
 			t.Errorf("選択折りたたみ見出しに %q が無い: %q", want, sel)
 		}
@@ -56,13 +115,16 @@ func TestCollapsedHeadingAggregateMarks(t *testing.T) {
 		t.Errorf("0 件のクラッシュマークを出してはいけない: %q", sel)
 	}
 
-	// 非選択行（色付き）でも同じ集約が出る。
+	// 非選択行にはインジケータが立たず、同じ集約が状態色で出る。
 	m.sel = -1
 	colored := m.nodeLine(0, m.nodes[0])
 	for _, want := range []string{"▸", "●1", "○1"} {
 		if !strings.Contains(colored, want) {
 			t.Errorf("非選択折りたたみ見出しに %q が無い: %q", want, colored)
 		}
+	}
+	if strings.Contains(colored, "▌") {
+		t.Errorf("非選択行にインジケータ ▌ を出してはいけない: %q", colored)
 	}
 }
 

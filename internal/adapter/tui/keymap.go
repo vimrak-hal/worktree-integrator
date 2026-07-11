@@ -107,15 +107,15 @@ func newKeyMap() keyMap {
 	}
 }
 
-// newHelp はヘルプ行の描画器を作る。見た目を既存の styHelp（faint）に合わせ、区切りは
-// 現行 helpLine の 2 スペースに寄せる（help のデフォルトは色付き " • " 区切り）。
+// newHelp はヘルプ行の描画器を作る。charm 系ツール風に、キー部分を colorAccent の太字、
+// 説明を faint、項目区切りを faint の " · " にする（背景色は使わずテーマ追従を保つ）。
 func newHelp() help.Model {
 	h := help.New()
 	faint := lipgloss.NewStyle().Faint(true)
-	h.Styles.ShortKey = faint
+	h.Styles.ShortKey = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	h.Styles.ShortDesc = faint
 	h.Styles.ShortSeparator = faint
-	h.ShortSeparator = "  "
+	h.ShortSeparator = " · "
 	return h
 }
 

@@ -16,13 +16,13 @@ const (
 )
 
 // スタイルは基本 16 色（ANSI）だけを使う。dev サーバーのログを見る端末は多様で
-// あり、256 色やトゥルーカラーを仮定しない。
+// あり、256 色やトゥルーカラーを仮定しない。背景色は端末テーマに追従させるため
+// 使わず、前景色・faint・bold だけで強調を表現する。
 var (
-	styFlag     = lipgloss.NewStyle().Foreground(colorAccent)
-	styHelp     = lipgloss.NewStyle().Faint(true)
-	styNote     = lipgloss.NewStyle().Foreground(colorWarn)
-	styErrNote  = lipgloss.NewStyle().Foreground(colorError)
-	stySelected = lipgloss.NewStyle().Reverse(true)
+	styFlag    = lipgloss.NewStyle().Foreground(colorAccent)
+	styHelp    = lipgloss.NewStyle().Faint(true)
+	styNote    = lipgloss.NewStyle().Foreground(colorWarn)
+	styErrNote = lipgloss.NewStyle().Foreground(colorError)
 
 	styLineError = lipgloss.NewStyle().Foreground(colorError)
 	styLineWarn  = lipgloss.NewStyle().Foreground(colorWarn)
@@ -32,10 +32,26 @@ var (
 	styMarkCrashed = lipgloss.NewStyle().Foreground(colorError)
 	styMarkStopped = lipgloss.NewStyle().Faint(true)
 
-	// ペインの見出し。フォーカス側は反転+太字、非フォーカス側は faint。どちらの
-	// ペインを操作しているかを一目で分かるようにする。
+	// ペインの角丸ボーダー。フォーカス側は colorAccent、非フォーカス側は faint。
+	// どちらのペインを操作しているかをボーダー色で示す（反転は使わない）。
+	styBorder      = lipgloss.NewStyle().Faint(true)
+	styBorderFocus = lipgloss.NewStyle().Foreground(colorAccent)
+
+	// ペイン見出し（上辺のボーダーへ埋め込む文字列）。フォーカス側は colorAccent+太字、
+	// 非フォーカス側は faint。ボーダー色と揃えてフォーカスを一目で分かるようにする。
 	styPaneTitle      = lipgloss.NewStyle().Faint(true)
-	styPaneTitleFocus = lipgloss.NewStyle().Reverse(true).Bold(true)
+	styPaneTitleFocus = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+
+	// ツリーの選択行。反転はやめ、行頭に colorAccent の ▌ インジケータを立て、行本文は
+	// 太字にする（非選択行は行頭 1 桁の空白で整列を保つ）。
+	stySelIndicator = lipgloss.NewStyle().Foreground(colorAccent)
+	stySelText      = lipgloss.NewStyle().Bold(true)
+
+	// ログ見出しのフラグを表すピル（バッジ）。背景色は使わず文字色のみ: 追従=緑、
+	// 前世代/フィルタ=シアン、読取失敗=赤。
+	styPillRun    = lipgloss.NewStyle().Foreground(colorRunning)
+	styPillAccent = lipgloss.NewStyle().Foreground(colorAccent)
+	styPillError  = lipgloss.NewStyle().Foreground(colorError)
 )
 
 // colorizeLog はログの 1 行にレベル推定の色付けをする。構造化ログではないため

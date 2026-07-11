@@ -7,10 +7,12 @@ import (
 
 	"github.com/charmbracelet/bubbles/help"
 	kb "github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/app"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/server"
@@ -191,6 +193,9 @@ type model struct {
 	// opRunning 中は新しい統合操作を受け付けない（1 つずつ実行する）。
 	opRunning bool
 	opLabel   string
+	// spin は opRunning 中だけ回す控えめなスピナー（MiniDot・colorAccent）。tick は
+	// startOp で開始し、opRunning が下りたら次の TickMsg で止める（無駄な再描画を避ける）。
+	spin spinner.Model
 	// quitAfterOp は操作中に終了要求があったことを表す（完了を待って終了する）。
 	quitAfterOp bool
 	// events はライフサイクル・作成進捗のイベント履歴。フッターには直近
@@ -206,6 +211,8 @@ func newModel(ctx context.Context, cfg *config.File, root statedir.Root, fw *for
 	input := textinput.New()
 	input.Prompt = "/"
 	input.Placeholder = "フィルタ（部分一致）"
+	sp := spinner.New(spinner.WithSpinner(spinner.MiniDot))
+	sp.Style = lipgloss.NewStyle().Foreground(colorAccent)
 	return &model{
 		ctx:       ctx,
 		root:      root,
@@ -217,6 +224,7 @@ func newModel(ctx context.Context, cfg *config.File, root statedir.Root, fw *for
 		follow:    true,
 		wrap:      true,
 		input:     input,
+		spin:      sp,
 		tails:     map[string]*tailer{},
 		bufs:      map[string]*ring{},
 		collapsed: map[string]bool{},
@@ -233,11 +241,17 @@ func (m *model) leftW() int {
 	return clamp(m.width/3, 24, 40)
 }
 
-// rightW は右ペイン（ログ・フォーム）の表示幅。左ペインと区切り "│" を除いた残り。
-// ビューポート幅（Update の WindowSizeMsg で決まる幅）と同じ計算で、huh フォームの
-// 幅指定にも使う。
+// rightW は右ペイン（ログ・フォーム）の内側表示幅。左ペインのボックス幅と、右ペインの
+// ボーダー 2 桁（左右）を差し引いた残り。ビューポート幅（Update の WindowSizeMsg で決まる
+// 幅）と同じ計算で、ボーダー内に収めるための huh フォームの WithWidth にも使う。
 func (m *model) rightW() int {
-	return max(1, m.width-m.leftW()-1)
+	return max(1, m.width-m.leftW()-2)
+}
+
+// bodyInnerH は各ペインのボーダー内側の高さ（ビューポート高さと同じ）。上下のボーダー
+// 2 行とヘルプ行 1 行を除いた残り。huh フォームの WithHeight にも使う。
+func (m *model) bodyInnerH() int {
+	return max(1, m.height-3)
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -247,8 +261,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// ヘルプ行の幅超過時の省略（…）を端末幅に合わせる。
 		m.help.Width = m.width
 		lw := m.leftW()
-		// クローム 3 行（ペインタイトル行・note 行・ヘルプ行）を除いた残りが本文。
-		w, h := max(1, m.width-lw-1), max(1, m.height-3)
+		// 右ペインの内側寸法。左ボックス幅 lw と右ボーダー 2 桁（左右）を引いた幅、
+		// 上下ボーダー 2 行 + ヘルプ行 1 行を引いた高さ（= ビューポートの寸法）。
+		w, h := max(1, m.width-lw-2), max(1, m.height-3)
 		if !m.ready {
 			m.vp = viewport.New(w, h)
 			m.ready = true
@@ -270,6 +285,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case resolveTickMsg:
 		return m, tea.Batch(m.resolveCmd(), resolveTick())
+
+	case spinner.TickMsg:
+		// 実行中の間だけスピナーを進める。opRunning が下りたら転送せず tick を止め、
+		// 無駄な再描画を避ける（startOp が次の実行開始時に改めて回し始める）。
+		if !m.opRunning {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg)
+		return m, cmd
 
 	case treesTickMsg:
 		// 操作の実行中は worktree 一覧を触らない（完了時に取り直す）。
@@ -309,7 +334,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.repos = msg.res
 		m.formName = ""
 		m.formRepos = nil
-		m.form = newCreateForm(msg.res.Repos, &m.formName, &m.formRepos, m.rightW())
+		m.form = newCreateForm(msg.res.Repos, &m.formName, &m.formRepos, m.rightW()).WithHeight(m.bodyInnerH())
 		m.formKind = formCreate
 		return m, m.form.Init()
 
@@ -431,7 +456,8 @@ func (m *model) startOp(label string, cmd tea.Cmd) (tea.Model, tea.Cmd) {
 	m.opRunning = true
 	m.opLabel = label
 	m.note, m.noteErr = "", false
-	return m, cmd
+	// スピナーの tick を開始する（opRunning の間だけ回り、完了で止まる）。
+	return m, tea.Batch(cmd, m.spin.Tick)
 }
 
 // updateFilterKey はフィルタ入力中のキー操作（ライブ反映）。
@@ -528,7 +554,7 @@ func (m *model) updateTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if wt, ok := m.selectedWorktree(); ok {
 			m.promptTarget = wt
 			m.formConfirm = false
-			m.form = newRemoveForm(wt, &m.formConfirm, m.rightW())
+			m.form = newRemoveForm(wt, &m.formConfirm, m.rightW()).WithHeight(m.bodyInnerH())
 			m.formKind = formRemove
 			return m, m.form.Init()
 		}
@@ -536,7 +562,7 @@ func (m *model) updateTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if wt, ok := m.selectedWorktree(); ok {
 			m.promptTarget = wt
 			m.formAlias = m.selectedAlias()
-			m.form = newAliasForm(&m.formAlias, m.rightW())
+			m.form = newAliasForm(&m.formAlias, m.rightW()).WithHeight(m.bodyInnerH())
 			m.formKind = formAlias
 			return m, m.form.Init()
 		}
