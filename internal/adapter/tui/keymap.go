@@ -15,8 +15,9 @@ type keyMap struct {
 	Quit kb.Binding
 
 	// --- ツリー（左ペイン） ---
-	Up   kb.Binding // 表示は "j/k 選択"（Down と対で 1 項目に見せる）
-	Down kb.Binding
+	Up      kb.Binding // 表示は "j/k 選択"（Down と対で 1 項目に見せる）
+	Down    kb.Binding
+	Refresh kb.Binding
 }
 
 // newKeyMap は全バインドを構築する。
@@ -24,8 +25,9 @@ func newKeyMap() keyMap {
 	return keyMap{
 		Quit: kb.NewBinding(kb.WithKeys("q"), kb.WithHelp("q", "終了")),
 
-		Up:   kb.NewBinding(kb.WithKeys("k", "up"), kb.WithHelp("j/k", "選択")),
-		Down: kb.NewBinding(kb.WithKeys("j", "down"), kb.WithHelp("j/k", "選択")),
+		Up:      kb.NewBinding(kb.WithKeys("k", "up"), kb.WithHelp("j/k", "選択")),
+		Down:    kb.NewBinding(kb.WithKeys("j", "down"), kb.WithHelp("j/k", "選択")),
+		Refresh: kb.NewBinding(kb.WithKeys("R"), kb.WithHelp("R", "更新")),
 	}
 }
 
@@ -46,6 +48,7 @@ func newHelp() help.Model {
 func (m *model) contextBindings() []kb.Binding {
 	return []kb.Binding{
 		m.keys.Up, // "j/k 選択"
+		m.keys.Refresh,
 		m.keys.Quit,
 	}
 }
