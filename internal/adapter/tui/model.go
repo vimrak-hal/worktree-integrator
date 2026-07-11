@@ -64,6 +64,13 @@ type node struct {
 	running bool
 	pid     int
 	crashed bool
+
+	// collapsed は worktree ノードが折りたたみ表示か（サーバーノードでは常に false）。
+	// 折りたたみ中は配下のサーバーノードを生成せず、見出しに集約マークを付ける。
+	collapsed bool
+	// nRunning / nCrashed / nStopped は折りたたみ見出しの集約表示に使う、配下サーバーの
+	// 状態別件数（worktree ノードのみ設定）。折りたたみの有無に依らず配下の全数を数える。
+	nRunning, nCrashed, nStopped int
 }
 
 // isWorktree は worktree ノード（配下にサーバーノードを持つ見出し行）かどうか。
@@ -124,6 +131,15 @@ type model struct {
 	sel int
 	// treeTop はツリーの縦スクロール位置（可視域の先頭 nodes インデックス）。
 	treeTop int
+	// collapsed は worktree 名 → ユーザーの明示的な折りたたみ指定。**キーが存在しない
+	// 場合は既定ルールに従う**（稼働中またはクラッシュのサーバーが 1 つでもあれば展開、
+	// すべて停止なら折りたたみ）。明示指定は両方向とも既定ルールに優先する。worktree が
+	// 消えたら buildNodes の掃除で該当キーも落とす。
+	collapsed map[string]bool
+	// allServerKeys は直近の buildNodes が算出した「worktree × 設定上のサーバー定義」の
+	// 全体集合（折りたたみ非依存）。折りたたみで m.nodes からサーバーノードが消えても、
+	// tails/bufs の掃除・ensureSelection の curKey 有効性判定はこの集合で行う。
+	allServerKeys map[string]bool
 
 	// --- ログ（右ペイン） ---
 	// curKey は表示中サーバーノードの key（空はプレースホルダ）。
@@ -191,18 +207,19 @@ func newModel(ctx context.Context, cfg *config.File, root statedir.Root, fw *for
 	input.Prompt = "/"
 	input.Placeholder = "フィルタ（部分一致）"
 	return &model{
-		ctx:    ctx,
-		root:   root,
-		cfg:    cfg,
-		fw:     fw,
-		keys:   newKeyMap(),
-		help:   newHelp(),
-		focus:  focusTree,
-		follow: true,
-		wrap:   true,
-		input:  input,
-		tails:  map[string]*tailer{},
-		bufs:   map[string]*ring{},
+		ctx:       ctx,
+		root:      root,
+		cfg:       cfg,
+		fw:        fw,
+		keys:      newKeyMap(),
+		help:      newHelp(),
+		focus:     focusTree,
+		follow:    true,
+		wrap:      true,
+		input:     input,
+		tails:     map[string]*tailer{},
+		bufs:      map[string]*ring{},
+		collapsed: map[string]bool{},
 	}
 }
 
@@ -474,6 +491,15 @@ func (m *model) updateTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.moveSel(1)
 	case kb.Matches(msg, m.keys.Up):
 		return m, m.moveSel(-1)
+	case kb.Matches(msg, m.keys.NextWorktree):
+		m.jumpWorktree(1)
+		return m, nil
+	case kb.Matches(msg, m.keys.PrevWorktree):
+		m.jumpWorktree(-1)
+		return m, nil
+	case kb.Matches(msg, m.keys.Collapse):
+		m.toggleCollapse()
+		return m, nil
 	case kb.Matches(msg, m.keys.SwitchTo):
 		if wt, ok := m.selectedWorktree(); ok {
 			return m.startOp("switch "+wt, m.switchCmd(wt, false))
@@ -586,6 +612,67 @@ func (m *model) moveSel(delta int) tea.Cmd {
 	return nil
 }
 
+// isCollapsed は worktree の折りたたみ状態を決める。不変条件: ユーザーの明示指定
+// （m.collapsed にキーが存在する）は両方向とも既定ルールに優先する。指定が無ければ
+// 既定ルール（anyActive=稼働中またはクラッシュが 1 つでもある → 展開、全停止 → 折りたたみ）。
+func (m *model) isCollapsed(wt string, anyActive bool) bool {
+	if v, ok := m.collapsed[wt]; ok {
+		return v
+	}
+	return !anyActive
+}
+
+// toggleCollapse はカーソル位置の worktree（サーバーノード上ならその親 worktree）の
+// 折りたたみをトグルし、明示指定として m.collapsed に記録する。現在の実効状態は直近の
+// buildNodes が見出しノードへ書いた collapsed を正として反転するため、既定ルールで
+// 折りたたまれている worktree でも Space 一発で展開できる（明示展開が既定ルールに勝つ）。
+// サーバーノード上から折りたたんだ場合は、消えるサーバーノードにカーソルが取り残されない
+// よう見出しへ移す。
+func (m *model) toggleCollapse() {
+	wt, ok := m.selectedWorktree()
+	if !ok {
+		return
+	}
+	onServer := !m.nodes[m.sel].isWorktree()
+	m.collapsed[wt] = !m.worktreeCollapsed(wt)
+	m.buildNodes()
+	if onServer && m.collapsed[wt] {
+		m.selectWorktreeHeading(wt)
+	}
+}
+
+// worktreeCollapsed は現在の見出しノードが持つ実効的な折りたたみ状態を返す（明示指定と
+// 既定ルールを buildNodes が解決済みの値）。見出しが無ければ false。
+func (m *model) worktreeCollapsed(wt string) bool {
+	for _, n := range m.nodes {
+		if n.isWorktree() && n.wt == wt {
+			return n.collapsed
+		}
+	}
+	return false
+}
+
+// selectWorktreeHeading はカーソルを指定 worktree の見出しノードへ移す。
+func (m *model) selectWorktreeHeading(wt string) {
+	for i, n := range m.nodes {
+		if n.isWorktree() && n.wt == wt {
+			m.sel = i
+			return
+		}
+	}
+}
+
+// jumpWorktree はカーソルを次（dir=1）／前（dir=-1）の worktree 見出しノードへ移す。
+// 間のサーバーノードは飛ばし、端ではラップせず（見つからなければ）動かない。
+func (m *model) jumpWorktree(dir int) {
+	for i := m.sel + dir; i >= 0 && i < len(m.nodes); i += dir {
+		if m.nodes[i].isWorktree() {
+			m.sel = i
+			return
+		}
+	}
+}
+
 // selectedWorktree はカーソル位置のノードが属する worktree 名を返す（worktree ノード・
 // サーバーノードのどちらでも親の worktree 名になる）。
 func (m *model) selectedWorktree() (string, bool) {
@@ -621,6 +708,13 @@ func (m *model) buildNodes() {
 	}
 
 	var nodes []node
+	// allKeys は「worktree × 設定上のサーバー定義（∪ 稼働中に現れる座標）」の全体集合。
+	// 折りたたみに依存せず（折りたたんだ worktree のサーバーもここに数える）、tails/bufs の
+	// 掃除と ensureSelection の curKey 有効性判定はこの集合で行う。折りたたみでバッファや
+	// ログ対象が消えてはいけない、という不変条件のための土台。
+	allKeys := map[string]bool{}
+	// liveWts は現存する worktree 名の集合。明示指定マップ（m.collapsed）の掃除に使う。
+	liveWts := map[string]bool{}
 	if m.trees != nil {
 		// crashed 判定用: サーバーノードの key → クラッシュ。
 		crashed := map[string]bool{}
@@ -638,7 +732,7 @@ func (m *model) buildNodes() {
 		}
 
 		for _, wt := range m.trees.Worktrees {
-			nodes = append(nodes, node{wt: wt.Name, alias: wt.Alias, broken: wt.Broken})
+			liveWts[wt.Name] = true
 
 			type rs struct{ repo, server string }
 			set := map[rs]bool{}
@@ -665,20 +759,49 @@ func (m *model) buildNodes() {
 				}
 				return keys[i].server < keys[j].server
 			})
+
+			// 配下サーバーノードを先に組み、状態別に数える（集約表示・既定ルールの判定用）。
+			// allKeys へは折りたたみに依らず全サーバーの key を登録する。
+			srvNodes := make([]node, 0, len(keys))
+			var nRunning, nCrashed, nStopped int
 			for _, k := range keys {
 				pid, isRunning := running[k]
-				nodes = append(nodes, node{
+				sn := node{
 					wt:      wt.Name,
 					repo:    k.repo,
 					server:  k.server,
 					running: isRunning,
 					pid:     pid,
 					crashed: crashed[wt.Name+"\x00"+k.repo+"/"+k.server],
-				})
+				}
+				allKeys[sn.key()] = true
+				switch {
+				case sn.running:
+					nRunning++
+				case sn.crashed:
+					nCrashed++
+				default:
+					nStopped++
+				}
+				srvNodes = append(srvNodes, sn)
+			}
+
+			// 既定ルール: 稼働中またはクラッシュが 1 つでもあれば展開、全停止なら折りたたみ。
+			// 明示指定（両方向）が常に優先する。
+			collapsed := m.isCollapsed(wt.Name, nRunning > 0 || nCrashed > 0)
+			nodes = append(nodes, node{
+				wt: wt.Name, alias: wt.Alias, broken: wt.Broken,
+				collapsed: collapsed,
+				nRunning:  nRunning, nCrashed: nCrashed, nStopped: nStopped,
+			})
+			// 折りたたまれた worktree はサーバーノードを生成しない（見出しのみ）。
+			if !collapsed {
+				nodes = append(nodes, srvNodes...)
 			}
 		}
 	}
 	m.nodes = nodes
+	m.allServerKeys = allKeys
 
 	// 旧カーソルのノードが残っていれば追従、消えていれば clamp。
 	m.sel = 0
@@ -691,24 +814,25 @@ func (m *model) buildNodes() {
 	m.sel = clamp(m.sel, 0, max(0, len(nodes)-1))
 
 	// worktree の作成→削除を繰り返すと key が毎回変わり、掃除しないとリング
-	// （最大 targetRingCap 行）が対象ごとに残ってヒープが単調増加する。現存する
-	// サーバーノードの key 集合に無い tailer / バッファを落とす（tailer は poll ごとに
-	// open/close なので fd の後始末は不要）。curKey は ensureSelection でノード集合内へ
-	// 戻るが、表示中の対象は防御的に保護する。
-	live := make(map[string]bool, len(nodes))
-	for _, n := range nodes {
-		if !n.isWorktree() {
-			live[n.key()] = true
-		}
-	}
+	// （最大 targetRingCap 行）が対象ごとに残ってヒープが単調増加する。掃除・curKey の
+	// 有効性判定はどちらも allKeys（折りたたみ非依存の全体集合）で行う: 折りたたんだ
+	// worktree のサーバーもバッファ・ログ対象を維持し、折りたたみでログが消えないため。
+	// tailer は poll ごとに open/close なので fd の後始末は不要。curKey は ensureSelection で
+	// ノード集合内へ戻るが、表示中の対象は防御的に保護する。
 	for k := range m.tails {
-		if !live[k] && k != m.curKey {
+		if !allKeys[k] && k != m.curKey {
 			delete(m.tails, k)
 		}
 	}
 	for k := range m.bufs {
-		if !live[k] && k != m.curKey {
+		if !allKeys[k] && k != m.curKey {
 			delete(m.bufs, k)
+		}
+	}
+	// 明示的な折りたたみ指定も、worktree が消えたら同じ場所で掃除する。
+	for wt := range m.collapsed {
+		if !liveWts[wt] {
+			delete(m.collapsed, wt)
 		}
 	}
 }
@@ -716,7 +840,10 @@ func (m *model) buildNodes() {
 // ensureSelection は curKey を有効なサーバーノードに保つ。消えた対象はプレースホルダへ
 // 戻し、未選択（初回など）なら最初のサーバーノードへ合わせて再解決する。
 func (m *model) ensureSelection() tea.Cmd {
-	if m.curKey != "" && !m.hasNode(m.curKey) {
+	// 有効性判定は m.nodes ではなく allServerKeys（折りたたみ非依存の全体集合）で行う。
+	// 折りたたんだ worktree のサーバーノードは m.nodes に無いが、ログ対象としては生きて
+	// いる（「サーバーノード上に無い間は直近の対象を表示」という既存セマンティクスを維持）。
+	if m.curKey != "" && !m.allServerKeys[m.curKey] {
 		// 対象が消えたら表示をプレースホルダへ戻す。
 		m.curKey = ""
 	}
@@ -727,15 +854,6 @@ func (m *model) ensureSelection() tea.Cmd {
 		}
 	}
 	return nil
-}
-
-func (m *model) hasNode(key string) bool {
-	for _, n := range m.nodes {
-		if n.key() == key {
-			return true
-		}
-	}
-	return false
 }
 
 func (m *model) firstServerKey() (string, bool) {

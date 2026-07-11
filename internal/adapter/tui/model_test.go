@@ -58,6 +58,10 @@ func key(msg string) tea.KeyMsg {
 func TestBuildNodesLayout(t *testing.T) {
 	m := newTestModel(t)
 	m.cfg = serverCfg()
+	// このテストは「展開中の worktree 配下にサーバーが repo→server 順で並ぶ」レイアウトを
+	// 検証する。既定ルールでは全停止の feat-b は折りたたまれサーバーノードが出ないため、
+	// 両 worktree を明示展開して従来のレイアウトを固定する（折りたたみ自体は別テスト）。
+	m.collapsed = map[string]bool{"feat-a": false, "feat-b": false}
 	m.trees = treesResult(
 		tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}},
 			Servers: []tree.ServerCell{{Repo: "api", Server: "backend", Pid: 4242}}},
@@ -92,11 +96,172 @@ func TestBuildNodesLayout(t *testing.T) {
 	}
 }
 
+// 既定ルール: 稼働中またはクラッシュのサーバーが 1 つでもあれば展開、全停止なら折りたたむ。
+// 折りたたみ側はサーバーノードを生成せず（見出しのみ）、ノード構成が変わる。
+func TestBuildNodesDefaultCollapse(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg = serverCfg()
+	m.trees = treesResult(
+		// feat-a は backend 稼働 → 既定で展開。
+		tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}},
+			Servers: []tree.ServerCell{{Repo: "api", Server: "backend", Pid: 4242}}},
+		// feat-b は全停止 → 既定で折りたたみ。
+		tree.WorktreeRow{Name: "feat-b", Repos: []tree.RepoCell{{Repo: "api"}}},
+	)
+	m.buildNodes()
+
+	// feat-a: 見出し + backend + web、feat-b: 見出しのみ。
+	want := []string{"feat-a", "feat-a\x00api/backend", "feat-a\x00api/web", "feat-b"}
+	if len(m.nodes) != len(want) {
+		t.Fatalf("nodes = %d, want %d (%+v)", len(m.nodes), len(want), m.nodes)
+	}
+	for i, w := range want {
+		if got := m.nodes[i].key(); got != w {
+			t.Fatalf("node[%d].key = %q, want %q", i, got, w)
+		}
+	}
+	if m.nodes[0].collapsed {
+		t.Error("稼働中サーバーを持つ feat-a は展開されるべき")
+	}
+	if !m.nodes[3].collapsed {
+		t.Error("全停止の feat-b は折りたたまれるべき")
+	}
+	// 折りたたみ非依存に配下の全数を数える（集約表示用）。feat-b は停止 2 件のみ。
+	if b := m.nodes[3]; b.nStopped != 2 || b.nRunning != 0 || b.nCrashed != 0 {
+		t.Fatalf("feat-b aggregate = run%d crash%d stop%d", b.nRunning, b.nCrashed, b.nStopped)
+	}
+}
+
+// 明示指定（両方向）は既定ルールに優先する。全停止で既定折りたたみの worktree でも
+// Space 一発で展開でき、もう一度で明示折りたたみに戻る。
+func TestToggleCollapseExplicitOverridesDefault(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg = serverCfg()
+	m.trees = treesResult(tree.WorktreeRow{Name: "feat-b", Repos: []tree.RepoCell{{Repo: "api"}}})
+	m.buildNodes()
+	// 既定では全停止で折りたたみ、カーソルは見出し上。
+	if !m.nodes[m.sel].isWorktree() || !m.nodes[0].collapsed {
+		t.Fatalf("既定では feat-b は折りたたみ見出しのはず: %+v", m.nodes)
+	}
+
+	m.Update(key(" ")) // Space: 明示展開（既定に勝つ）
+	if m.collapsed["feat-b"] {
+		t.Fatal("Space は展開の明示指定にするべき")
+	}
+	if len(m.nodes) != 3 { // 見出し + backend + web
+		t.Fatalf("明示展開でサーバーノードが出るべき: nodes=%d", len(m.nodes))
+	}
+
+	m.Update(key(" ")) // Space: 明示折りたたみへ戻す
+	if !m.collapsed["feat-b"] {
+		t.Fatal("再度の Space は折りたたみの明示指定にするべき")
+	}
+	if len(m.nodes) != 1 {
+		t.Fatalf("折りたたみで見出しのみになるべき: nodes=%d", len(m.nodes))
+	}
+}
+
+// サーバーノード上から折りたたむと、消えるサーバーノードにカーソルが取り残されないよう
+// 親 worktree の見出しへカーソルが移る。
+func TestToggleCollapseFromServerMovesCursorToHeading(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg = serverCfg()
+	// backend 稼働 → 既定で展開しサーバーノードが並ぶ。
+	m.trees = treesResult(
+		tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}},
+			Servers: []tree.ServerCell{{Repo: "api", Server: "backend", Pid: 4242}}},
+	)
+	m.buildNodes()
+	m.sel = 1 // backend サーバーノード
+	if m.nodes[m.sel].isWorktree() {
+		t.Fatal("test setup: サーバーノード上にいるべき")
+	}
+
+	m.Update(key(" "))
+	if !m.collapsed["feat-a"] {
+		t.Fatal("Space は折りたたみの明示指定にするべき")
+	}
+	if !m.nodes[m.sel].isWorktree() || m.nodes[m.sel].wt != "feat-a" {
+		t.Fatalf("カーソルは feat-a 見出しへ移るべき: sel=%d node=%+v", m.sel, m.nodes[m.sel])
+	}
+}
+
+// J/K は間のサーバーノードを飛ばして次／前の worktree 見出しへ移動し、端では動かない。
+func TestJumpWorktree(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg = serverCfg()
+	// 見出しの間にサーバーノードを挟むため両 worktree を明示展開する。
+	m.collapsed = map[string]bool{"feat-a": false, "feat-b": false}
+	m.trees = treesResult(
+		tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}}},
+		tree.WorktreeRow{Name: "feat-b", Repos: []tree.RepoCell{{Repo: "api"}}},
+	)
+	m.buildNodes()
+	// nodes: 0 feat-a, 1 backend, 2 web, 3 feat-b, 4 backend, 5 web
+	m.sel = 0
+
+	m.Update(key("J")) // 次の見出し feat-b（間の 1,2 を飛ばす）
+	if m.sel != 3 || !m.nodes[m.sel].isWorktree() {
+		t.Fatalf("J は feat-b 見出し(3)へ移るべき: sel=%d", m.sel)
+	}
+	m.Update(key("J")) // 末尾の worktree ではラップせず動かない
+	if m.sel != 3 {
+		t.Fatalf("末尾の worktree で J は動かないべき: sel=%d", m.sel)
+	}
+	m.Update(key("K")) // 前の見出し feat-a
+	if m.sel != 0 || !m.nodes[m.sel].isWorktree() {
+		t.Fatalf("K は feat-a 見出し(0)へ移るべき: sel=%d", m.sel)
+	}
+	m.Update(key("K")) // 先頭ではラップせず動かない
+	if m.sel != 0 {
+		t.Fatalf("先頭で K は動かないべき: sel=%d", m.sel)
+	}
+}
+
+// 不変条件: 折りたたんでも curKey（直近のログ対象）とそのバッファ・tailer は維持される。
+// 掃除・有効性判定は折りたたみ非依存の全体集合（allServerKeys）で行うため。
+func TestCollapsePreservesBuffersAndCurKey(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg = serverCfg()
+	m.trees = treesResult(
+		tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}},
+			Servers: []tree.ServerCell{{Repo: "api", Server: "backend", Pid: 4242}}},
+	)
+	m.buildNodes()
+	k := "feat-a\x00api/backend"
+	m.curKey = k
+	m.tails[k] = newTailer("/does-not-matter")
+	m.bufs[k] = newRing(targetRingCap)
+
+	m.sel = 0 // 見出し上で折りたたむ
+	m.Update(key(" "))
+	if !m.collapsed["feat-a"] {
+		t.Fatal("折りたたみの明示指定になるべき")
+	}
+	// サーバーノードは m.nodes から消えても、対象・バッファ・tailer は残る。
+	if m.curKey != k {
+		t.Fatalf("折りたたみで curKey が消えた: %q", m.curKey)
+	}
+	if m.tails[k] == nil || m.bufs[k] == nil {
+		t.Fatal("折りたたみで tailer / バッファが消えてはいけない")
+	}
+	// ensureSelection も全体集合で判定するので curKey は維持される。
+	if cmd := m.ensureSelection(); cmd != nil {
+		t.Fatal("生きている curKey に対して再選択コマンドは不要")
+	}
+	if m.curKey != k || m.tails[k] == nil || m.bufs[k] == nil {
+		t.Fatalf("ensureSelection が折りたたみ中の対象を消した: curKey=%q", m.curKey)
+	}
+}
+
 // サーバーノードへ移動すると表示ログ対象（curKey）が変わり、worktree ノード上では
 // 対象が維持される。
 func TestMoveSelUpdatesTarget(t *testing.T) {
 	m := newTestModel(t)
 	m.cfg = serverCfg()
+	// カーソル移動でログ対象が切り替わる挙動を見るため、全停止でも両 worktree を明示展開して
+	// サーバーノードを出す（既定ルールでは折りたたまれてしまう）。
+	m.collapsed = map[string]bool{"feat-a": false, "feat-b": false}
 	m.trees = treesResult(
 		tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}}},
 		tree.WorktreeRow{Name: "feat-b", Repos: []tree.RepoCell{{Repo: "api"}}},

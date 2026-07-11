@@ -28,6 +28,44 @@ func TestViewShowsBothPanes(t *testing.T) {
 	}
 }
 
+// 折りたたみ見出しは ▸ グリフと、配下サーバーの状態を集約したマーク（0 件は非表示）を
+// 右に付ける。選択行は無色、非選択行は状態色付きで組む（どちらも数え上げは同じ）。
+func TestCollapsedHeadingAggregateMarks(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg = serverCfg()
+	// backend 稼働 + web 停止（クラッシュ 0）。明示的に折りたたむ。
+	m.collapsed = map[string]bool{"feat-x": true}
+	m.trees = treesResult(
+		tree.WorktreeRow{Name: "feat-x", Repos: []tree.RepoCell{{Repo: "api"}},
+			Servers: []tree.ServerCell{{Repo: "api", Server: "backend", Pid: 4242}}},
+	)
+	m.buildNodes()
+	if len(m.nodes) != 1 || !m.nodes[0].collapsed {
+		t.Fatalf("明示折りたたみで見出しのみになるべき: %+v", m.nodes)
+	}
+
+	// 選択行（無色・反転）: ▸ と 稼働1・停止1 の集約。0 件のクラッシュは出ない。
+	m.sel = 0
+	sel := m.nodeLine(0, m.nodes[0])
+	for _, want := range []string{"▸", "feat-x", "●1", "○1"} {
+		if !strings.Contains(sel, want) {
+			t.Errorf("選択折りたたみ見出しに %q が無い: %q", want, sel)
+		}
+	}
+	if strings.Contains(sel, "✗") {
+		t.Errorf("0 件のクラッシュマークを出してはいけない: %q", sel)
+	}
+
+	// 非選択行（色付き）でも同じ集約が出る。
+	m.sel = -1
+	colored := m.nodeLine(0, m.nodes[0])
+	for _, want := range []string{"▸", "●1", "○1"} {
+		if !strings.Contains(colored, want) {
+			t.Errorf("非選択折りたたみ見出しに %q が無い: %q", want, colored)
+		}
+	}
+}
+
 // padDisplay は色付き（ANSI エスケープを含む）文字列でも表示幅をちょうど w にする。
 func TestPadDisplayFixesWidth(t *testing.T) {
 	colored := styFlag.Render("api/backend")

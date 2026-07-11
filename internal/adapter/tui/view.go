@@ -173,7 +173,13 @@ func (m *model) adjustTreeTop(total, viewH int) {
 // 反転する（マークの色との共存を避ける）。非選択のサーバーノードはマークを色付けする。
 func (m *model) nodeLine(i int, n node) string {
 	if n.isWorktree() {
-		text := "▾ " + n.wt
+		// 展開中は ▾、折りたたみ中は ▸。折りたたみは配下サーバーが見えないため、状態を
+		// 集約したマーク（例: ●2 ✗1）を見出しの右に添える。
+		glyph := "▾"
+		if n.collapsed {
+			glyph = "▸"
+		}
+		text := glyph + " " + n.wt
 		if n.alias != "" {
 			text += " (" + n.alias + ")"
 		}
@@ -181,7 +187,14 @@ func (m *model) nodeLine(i int, n node) string {
 			text += " (!)"
 		}
 		if i == m.sel {
+			// 選択行はマークの色と反転の共存を避け、無色で組んでから全体を反転する。
+			if agg := aggGlyphs(n); n.collapsed && agg != "" {
+				text += "  " + agg
+			}
 			return stySelected.Render(text)
+		}
+		if agg := aggColored(n); n.collapsed && agg != "" {
+			text += "  " + agg
 		}
 		return text
 	}
@@ -194,6 +207,38 @@ func (m *model) nodeLine(i int, n node) string {
 		return stySelected.Render("  " + markGlyph(n) + " " + suffix)
 	}
 	return "  " + markColored(n) + " " + suffix
+}
+
+// aggGlyphs は折りたたみ見出しの集約マーク（無色・選択行用）。並びは 稼働(●)→
+// クラッシュ(✗)→停止(○)、0 件の状態は表示しない。
+func aggGlyphs(n node) string {
+	var parts []string
+	if n.nRunning > 0 {
+		parts = append(parts, "●"+strconv.Itoa(n.nRunning))
+	}
+	if n.nCrashed > 0 {
+		parts = append(parts, "✗"+strconv.Itoa(n.nCrashed))
+	}
+	if n.nStopped > 0 {
+		parts = append(parts, "○"+strconv.Itoa(n.nStopped))
+	}
+	return strings.Join(parts, " ")
+}
+
+// aggColored は集約マークを状態色付きで組む（非選択行用）。色は状態マークの既存定数を
+// 流用: 稼働=緑・クラッシュ=赤・停止=faint。
+func aggColored(n node) string {
+	var parts []string
+	if n.nRunning > 0 {
+		parts = append(parts, styMarkRunning.Render("●"+strconv.Itoa(n.nRunning)))
+	}
+	if n.nCrashed > 0 {
+		parts = append(parts, styMarkCrashed.Render("✗"+strconv.Itoa(n.nCrashed)))
+	}
+	if n.nStopped > 0 {
+		parts = append(parts, styMarkStopped.Render("○"+strconv.Itoa(n.nStopped)))
+	}
+	return strings.Join(parts, " ")
 }
 
 // markGlyph は無色のマーク記号（選択行用）。
