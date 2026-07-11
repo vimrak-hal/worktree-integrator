@@ -43,6 +43,8 @@ const (
 	// maxRender はビューポートへ流す最大行数。フィルタ後にこれを超える分は古い側を
 	// 落とす（描画コストの上限）。
 	maxRender = 2000
+	// maxEvents はイベント履歴の保持上限。古い側から捨ててメモリを一定に保つ。
+	maxEvents = 100
 )
 
 // node はツリーの 1 行。worktree ノード（repo == ""）と、その配下のサーバーノード
@@ -100,6 +102,7 @@ type model struct {
 	// cfg は直近に正常に読み込めた設定。MCP サーバーと同様に定期的に再読み込みし、
 	// 編集は TUI の再起動なしで反映される（読めない間は直近の正常値で動き続ける）。
 	cfg *config.File
+	fw  *forwarder
 
 	// keys は全キーバインド、help はヘルプ行の描画器。キー処理は keys と
 	// kb.Matches で照合し、ヘルプ行は contextBindings を help が描く。
@@ -148,12 +151,21 @@ type model struct {
 	// --- モーダル ---
 	prompt promptMode
 
+	// opRunning 中は新しい統合操作を受け付けない（1 つずつ実行する）。
+	opRunning bool
+	opLabel   string
+	// quitAfterOp は操作中に終了要求があったことを表す（完了を待って終了する）。
+	quitAfterOp bool
+	// events はライフサイクル・作成進捗のイベント履歴。フッターには直近
+	// visibleEvents 件を時系列（上が古い順）で表示する。
+	events []string
+
 	// note はフッターの一時メッセージ（直近の操作結果・警告）。
 	note    string
 	noteErr bool
 }
 
-func newModel(ctx context.Context, cfg *config.File, root statedir.Root) *model {
+func newModel(ctx context.Context, cfg *config.File, root statedir.Root, fw *forwarder) *model {
 	input := textinput.New()
 	input.Prompt = "/"
 	input.Placeholder = "フィルタ（部分一致）"
@@ -161,6 +173,7 @@ func newModel(ctx context.Context, cfg *config.File, root statedir.Root) *model 
 		ctx:    ctx,
 		root:   root,
 		cfg:    cfg,
+		fw:     fw,
 		keys:   newKeyMap(),
 		help:   newHelp(),
 		focus:  focusTree,
@@ -214,7 +227,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.resolveCmd(), resolveTick())
 
 	case treesTickMsg:
-		return m, tea.Batch(m.treesCmd(), treesTick())
+		// 操作の実行中は worktree 一覧を触らない（完了時に取り直す）。
+		if !m.opRunning {
+			return m, tea.Batch(m.treesCmd(), treesTick())
+		}
+		return m, treesTick()
 
 	case resolvedMsg:
 		m.applyResolved(msg)
@@ -233,6 +250,26 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.rebuildLog()
 		return m, nil
+
+	case eventMsg:
+		m.events = append(m.events, msg.line)
+		if len(m.events) > maxEvents {
+			m.events = m.events[len(m.events)-maxEvents:]
+		}
+		return m, nil
+
+	case opDoneMsg:
+		m.opRunning = false
+		m.opLabel = ""
+		m.note, m.noteErr = msg.summary, msg.err != nil
+		if msg.err != nil {
+			m.note = msg.summary + "（" + msg.err.Error() + "）"
+		}
+		if m.quitAfterOp {
+			return m, tea.Quit
+		}
+		// 切り替え・停止で状態・一覧・ログパスが変わったはずなので、即座に再解決する。
+		return m, tea.Batch(m.resolveCmd(), m.treesCmd())
 
 	case tea.MouseMsg:
 		// フォーカスに関わらずホイールでログをスクロールする。上方向は追従を解除。
@@ -262,6 +299,12 @@ func (m *model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch {
 	case kb.Matches(msg, m.keys.Quit):
+		if m.opRunning {
+			// 操作の途中で抜けると中断されるため、完了を待つ（強制終了は Ctrl-C）。
+			m.quitAfterOp = true
+			m.note, m.noteErr = "実行中の操作の完了を待って終了します…（強制終了は Ctrl-C）", false
+			return m, nil
+		}
 		return m, tea.Quit
 	case kb.Matches(msg, m.keys.Focus):
 		m.toggleFocus()
@@ -280,6 +323,18 @@ func (m *model) toggleFocus() {
 	} else {
 		m.focus = focusTree
 	}
+}
+
+// startOp は統合操作を 1 つずつ実行するためのガード。実行中なら弾いて note を出す。
+func (m *model) startOp(label string, cmd tea.Cmd) (tea.Model, tea.Cmd) {
+	if m.opRunning {
+		m.note, m.noteErr = "別の操作を実行中です", true
+		return m, nil
+	}
+	m.opRunning = true
+	m.opLabel = label
+	m.note, m.noteErr = "", false
+	return m, cmd
 }
 
 // updateFilterKey はフィルタ入力中のキー操作（ライブ反映）。
@@ -314,6 +369,18 @@ func (m *model) updateTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.moveSel(1)
 	case kb.Matches(msg, m.keys.Up):
 		return m, m.moveSel(-1)
+	case kb.Matches(msg, m.keys.SwitchTo):
+		if wt, ok := m.selectedWorktree(); ok {
+			return m.startOp("switch "+wt, m.switchCmd(wt, false))
+		}
+	case kb.Matches(msg, m.keys.Restart):
+		if wt, ok := m.selectedWorktree(); ok {
+			return m.startOp("switch --restart "+wt, m.switchCmd(wt, true))
+		}
+	case kb.Matches(msg, m.keys.Stop):
+		if wt, ok := m.selectedWorktree(); ok {
+			return m.startOp("stop "+wt, m.stopCmd(wt))
+		}
 	case kb.Matches(msg, m.keys.Refresh):
 		return m, m.treesCmd()
 	}

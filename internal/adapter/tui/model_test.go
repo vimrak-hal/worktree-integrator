@@ -16,11 +16,11 @@ import (
 )
 
 // newTestModel は端末サイズ設定済みの（コマンドを一切走らせていない）モデルを返す。
-// 統合的な I/O（resolve）はワークフロー側のテストが担っており、ここでは
+// 統合的な I/O（resolve・switch）はワークフロー側のテストが担っており、ここでは
 // モデルの状態遷移だけを検証する。
 func newTestModel(t *testing.T) *model {
 	t.Helper()
-	m := newModel(t.Context(), &config.File{}, statedir.Root{})
+	m := newModel(t.Context(), &config.File{}, statedir.Root{}, &forwarder{})
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	return m
 }
@@ -173,6 +173,25 @@ func TestScrollDisablesFollow(t *testing.T) {
 	m.Update(key("f"))
 	if !m.follow {
 		t.Fatal("'f' must re-enable follow")
+	}
+}
+
+// 操作の実行中は q が完了待ちになり、完了メッセージで終了する。
+func TestQuitWaitsForRunningOperation(t *testing.T) {
+	m := newTestModel(t)
+	m.opRunning = true
+	if _, cmd := m.Update(key("q")); cmd != nil {
+		t.Fatal("q during an operation must not quit immediately")
+	}
+	if !m.quitAfterOp {
+		t.Fatal("q during an operation must arm quitAfterOp")
+	}
+	_, cmd := m.Update(opDoneMsg{summary: "done"})
+	if cmd == nil {
+		t.Fatal("operation completion must quit when quitAfterOp is armed")
+	}
+	if msg := cmd(); msg != tea.Quit() {
+		t.Fatalf("expected tea.Quit, got %#v", msg)
 	}
 }
 
