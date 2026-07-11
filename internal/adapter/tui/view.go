@@ -1,13 +1,14 @@
 package tui
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
 
 // View は現在のモデルを 1 画面に描画する。レイアウトは lazygit 風の 2 ペイン: 固定 3 行の
 // クローム（ペインタイトル行・note 行・ヘルプ行）と、その間の本文（左=ツリー、右=ログ）を
-// "│" で縦に区切る。
+// "│" で縦に区切る。本文の高さはビューポートと同じ height-3 に揃える。
 func (m *model) View() string {
 	if !m.ready {
 		return "起動中…"
@@ -36,7 +37,8 @@ func (m *model) View() string {
 	return b.String()
 }
 
-// titleLine はペインタイトル行（左=WORKTREES、右=ログ）。フォーカス側が反転で強調される。
+// titleLine はペインタイトル行（左=WORKTREES、右=ログ対象とフラグ）。フォーカス側が
+// 反転で強調される。
 func (m *model) titleLine(lw int) string {
 	left := padDisplay(m.paneTitle(" WORKTREES ", focusTree), lw)
 	return left + "│" + m.logTitle()
@@ -50,10 +52,36 @@ func (m *model) paneTitle(label string, f focusID) string {
 	return styPaneTitle.Render(label)
 }
 
-// logTitle は右ペインの見出し。ログペイン本体は後続で追加するため、この段では見出しの
-// プレースホルダのみを描く。
+// logTitle は右ペインの見出し: 対象（repo/server @ worktree）と、モードのフラグ
+// （追従・前世代・フィルタ／入力中の input.View()）。
 func (m *model) logTitle() string {
-	return m.paneTitle(" ログ ", focusLog)
+	label := " ログ "
+	if m.curKey != "" {
+		if wt, repo, srv, ok := splitKey(m.curKey); ok {
+			label = fmt.Sprintf(" ログ: %s/%s @ %s ", repo, srv, wt)
+		}
+	}
+	title := m.paneTitle(label, focusLog)
+
+	var flags []string
+	if m.follow {
+		flags = append(flags, "追従")
+	}
+	if m.prev {
+		flags = append(flags, "前世代(.prev)")
+	}
+	if m.prompt == promptFilter {
+		flags = append(flags, m.input.View())
+	} else if m.filter != "" {
+		flags = append(flags, "/"+m.filter)
+	}
+	if m.curReadErr != "" {
+		flags = append(flags, "読取失敗")
+	}
+	if len(flags) > 0 {
+		title += " " + styFlag.Render(strings.Join(flags, " "))
+	}
+	return title
 }
 
 // treeLines は左ペインの行を組む: スクロールするノード一覧の下に空行のフッターを置く。
@@ -159,10 +187,9 @@ func markColored(n node) string {
 	}
 }
 
-// rightLines は右ペインの行を返す。ログペイン本体は後続で追加するため、この段では
-// プレースホルダの案内のみを表示する。
+// rightLines は右ペインの行を返す（ビューポートのログ表示）。
 func (m *model) rightLines() []string {
-	return []string{"サーバーノードを選択してください"}
+	return strings.Split(m.vp.View(), "\n")
 }
 
 // joinPanes は左右のペイン行を "│" で縦に結合し、行数を h に揃える。左カラムは幅 leftW

@@ -9,15 +9,19 @@ import (
 	"github.com/vimrak-hal/worktree-integrator/internal/app/tree"
 )
 
-// 2 ペインは 1 画面にツリーのノード名を左に、右ペインを "│" 区切りで同時に描く。
+// 2 ペインは 1 画面にツリーのノード名とログ行を "│" 区切りで同時に描く。
 func TestViewShowsBothPanes(t *testing.T) {
 	m := newTestModel(t)
 	m.cfg = serverCfg()
 	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}}})
 	m.buildNodes()
+	m.curKey = "feat-a\x00api/backend"
+	m.bufs[m.curKey] = newRing(10)
+	m.bufs[m.curKey].push("hello-log-line")
+	m.rebuildLog()
 
 	view := m.View()
-	for _, want := range []string{"feat-a", "api/backend", "│"} {
+	for _, want := range []string{"feat-a", "api/backend", "hello-log-line", "│"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view missing %q", want)
 		}

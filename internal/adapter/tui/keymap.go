@@ -10,24 +10,71 @@ import (
 // kb.Matches でこの構造体の Binding と照合し、ヘルプ行（View）は各 Binding の
 // 表示テキストから help.Model が組み立てる。「実効キー（WithKeys）」と「表示
 // （WithHelp）」を 1 つの真実として持つことで、両者のズレを防ぐのが目的。
+//
+// 不変条件: 各 Binding の WithKeys は移行前の msg.String() スイッチと完全に一致
+// させる（例: ツリーの Up=k/up・Down=j/down、ログの HalfDown=d/pgdown）。表示用の
+// キー文字列（WithHelp の第 1 引数）は現行 helpLine の文言を再現するための見た目
+// であり、実効キーには影響しない。
 type keyMap struct {
 	// --- 共通（フォーカスやプロンプトに依らず効く） ---
-	Quit kb.Binding
+	Quit  kb.Binding
+	Focus kb.Binding // ペイン切替（実キー: tab/left/right/h/l）
 
 	// --- ツリー（左ペイン） ---
 	Up      kb.Binding // 表示は "j/k 選択"（Down と対で 1 項目に見せる）
 	Down    kb.Binding
 	Refresh kb.Binding
+
+	// --- ログ（右ペイン） ---
+	Follow      kb.Binding
+	Filter      kb.Binding
+	Prev        kb.Binding
+	Wrap        kb.Binding
+	Top         kb.Binding // 表示は "g/G"（Bottom と対）
+	Bottom      kb.Binding
+	HalfDown    kb.Binding
+	HalfUp      kb.Binding
+	LineDown    kb.Binding
+	LineUp      kb.Binding // 表示は "j/k スクロール"
+	ClearFilter kb.Binding
+
+	// --- フィルタ（表示にも matching にも使う） ---
+	Confirm kb.Binding
+
+	// --- 表示専用（フォーカス切替の文脈別ラベル） ---
+	// 現行 helpLine の「Tab→ログ」「Tab→ツリー」という文脈依存ラベルを再現する。
+	// matching は Focus が担うため、これらは help への露出のためだけに存在する
+	// （help はキーの無い Binding を描画しないので実キーを 1 つ持たせている）。
+	FocusToLog  kb.Binding
+	FocusToTree kb.Binding
 }
 
 // newKeyMap は全バインドを構築する。
 func newKeyMap() keyMap {
 	return keyMap{
-		Quit: kb.NewBinding(kb.WithKeys("q"), kb.WithHelp("q", "終了")),
+		Quit:  kb.NewBinding(kb.WithKeys("q"), kb.WithHelp("q", "終了")),
+		Focus: kb.NewBinding(kb.WithKeys("tab", "left", "right", "h", "l"), kb.WithHelp("Tab", "ペイン切替")),
 
 		Up:      kb.NewBinding(kb.WithKeys("k", "up"), kb.WithHelp("j/k", "選択")),
 		Down:    kb.NewBinding(kb.WithKeys("j", "down"), kb.WithHelp("j/k", "選択")),
 		Refresh: kb.NewBinding(kb.WithKeys("R"), kb.WithHelp("R", "更新")),
+
+		Follow:      kb.NewBinding(kb.WithKeys("f"), kb.WithHelp("f", "追従")),
+		Filter:      kb.NewBinding(kb.WithKeys("/"), kb.WithHelp("/", "フィルタ")),
+		Prev:        kb.NewBinding(kb.WithKeys("p"), kb.WithHelp("p", "前世代")),
+		Wrap:        kb.NewBinding(kb.WithKeys("w"), kb.WithHelp("w", "折り返し")),
+		Top:         kb.NewBinding(kb.WithKeys("g"), kb.WithHelp("g/G", "")),
+		Bottom:      kb.NewBinding(kb.WithKeys("G"), kb.WithHelp("G", "")),
+		HalfDown:    kb.NewBinding(kb.WithKeys("d", "pgdown"), kb.WithHelp("d", "pgdown")),
+		HalfUp:      kb.NewBinding(kb.WithKeys("u", "pgup"), kb.WithHelp("u", "pgup")),
+		LineDown:    kb.NewBinding(kb.WithKeys("j", "down"), kb.WithHelp("j/k", "スクロール")),
+		LineUp:      kb.NewBinding(kb.WithKeys("k", "up"), kb.WithHelp("j/k", "スクロール")),
+		ClearFilter: kb.NewBinding(kb.WithKeys("esc"), kb.WithHelp("esc", "解除")),
+
+		Confirm: kb.NewBinding(kb.WithKeys("enter"), kb.WithHelp("Enter", "確定/実行")),
+
+		FocusToLog:  kb.NewBinding(kb.WithKeys("tab"), kb.WithHelp("Tab", "→ログ")),
+		FocusToTree: kb.NewBinding(kb.WithKeys("tab"), kb.WithHelp("Tab", "→ツリー")),
 	}
 }
 
@@ -43,12 +90,52 @@ func newHelp() help.Model {
 	return h
 }
 
-// contextBindings は現在の文脈で表示すべきキーヘルプの並びを返す。項目・順序・日本語
-// ラベルは移行前の helpLine を踏襲する。
+// withHelp は既存 Binding の表示（キー/ラベル）だけを差し替えた複製を返す。同じキーへ
+// 文脈ごとに異なる説明を出す（例: Enter を「確定」「次へ」「実行」と出し分ける）ための
+// 表示専用ヘルパで、実効キー（WithKeys）は変えない。
+func withHelp(b kb.Binding, keyLabel, desc string) kb.Binding {
+	b.SetHelp(keyLabel, desc)
+	return b
+}
+
+// staticHelp はキーに紐づかない説明文（プロンプト冒頭の操作説明・「他キー 中止」など）を
+// ショートヘルプに 1 項目として載せるための表示専用 Binding。help はキーの無い Binding を
+// 描画しないため、Matches に決して渡さないダミーキーを与えて Enabled にしている。
+func staticHelp(keyLabel, desc string) kb.Binding {
+	return kb.NewBinding(kb.WithKeys("\x00"), kb.WithHelp(keyLabel, desc))
+}
+
+// contextBindings は現在の文脈（フィルタ / フォーカス）で表示すべきキーヘルプの並びを
+// 返す。項目・順序・日本語ラベルは移行前の helpLine を踏襲する。
 func (m *model) contextBindings() []kb.Binding {
-	return []kb.Binding{
-		m.keys.Up, // "j/k 選択"
-		m.keys.Refresh,
-		m.keys.Quit,
+	if m.prompt == promptFilter {
+		return []kb.Binding{
+			staticHelp("入力でフィルタ", ""),
+			withHelp(m.keys.Confirm, "Enter", "確定"),
+			withHelp(m.keys.ClearFilter, "Esc", "解除"),
+		}
 	}
+	if m.focus == focusTree {
+		return []kb.Binding{
+			m.keys.Up, // "j/k 選択"
+			m.keys.Refresh,
+			m.keys.FocusToLog,
+			m.keys.Quit,
+		}
+	}
+	logBindings := []kb.Binding{
+		m.keys.LineUp, // "j/k スクロール"
+		m.keys.Follow,
+		m.keys.Filter,
+		m.keys.Prev,
+		m.keys.Wrap,
+		m.keys.Top, // "g/G"
+	}
+	if m.filter != "" {
+		// フィルタ適用中のみ解除キーを見せる（Esc でクリア）。未適用時に出すと Esc の
+		// 対象が無く誤解を招くため条件付き。
+		logBindings = append(logBindings, withHelp(m.keys.ClearFilter, "Esc", "フィルタ解除"))
+	}
+	logBindings = append(logBindings, m.keys.FocusToTree, m.keys.Quit)
+	return logBindings
 }
