@@ -5,6 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/vimrak-hal/worktree-integrator/internal/app/server"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/tree"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/config"
 	coreserver "github.com/vimrak-hal/worktree-integrator/internal/core/server"
@@ -98,5 +99,28 @@ func TestMoveSelMovesCursor(t *testing.T) {
 	m.moveSel(100)
 	if want := len(m.nodes) - 1; m.sel != want {
 		t.Fatalf("sel clamped high = %d, want %d", m.sel, want)
+	}
+}
+
+// B2: 新しい seq の解決を適用した後、遅れて届いた古い seq は無視される（発行順の世代で
+// 古い解決を弾く）。
+func TestApplyResolvedIgnoresStaleSeq(t *testing.T) {
+	m := newTestModel(t)
+
+	// seq=2 の解決を適用（resolveApplied=2、status を採用）。
+	newStatus := &server.StatusResult{}
+	m.applyResolved(resolvedMsg{seq: 2, status: newStatus})
+	if m.resolveApplied != 2 {
+		t.Fatalf("resolveApplied = %d, want 2", m.resolveApplied)
+	}
+	if m.status != newStatus {
+		t.Fatal("seq=2 の status が採用されていない")
+	}
+
+	// 遅れて届いた古い seq=1 は無視され、status は上書きされない。
+	stale := &server.StatusResult{}
+	m.applyResolved(resolvedMsg{seq: 1, status: stale})
+	if m.status != newStatus {
+		t.Fatal("stale seq が status を上書きした")
 	}
 }

@@ -82,6 +82,12 @@ type model struct {
 	// treeTop はツリーの縦スクロール位置（可視域の先頭 nodes インデックス）。
 	treeTop int
 
+	// resolveSeq は resolveCmd の発行カウンタ、resolveApplied は適用済みの最大世代。
+	// ロック競合で遅延した古い解決が新しい解決を追い越さないよう、発行順の世代で
+	// 古い結果を捨てる（B2）。
+	resolveSeq     uint64
+	resolveApplied uint64
+
 	// note はフッターの一時メッセージ（直近の操作結果・警告）。
 	note    string
 	noteErr bool
@@ -99,7 +105,7 @@ func newModel(ctx context.Context, cfg *config.File, root statedir.Root) *model 
 }
 
 func (m *model) Init() tea.Cmd {
-	return m.treesCmd()
+	return tea.Batch(m.resolveCmd(), m.treesCmd(), resolveTick(), treesTick())
 }
 
 // leftW は左ペイン（ツリー）の表示幅。端末幅の 1/3 を基準に、狭すぎ・広すぎを避けて
@@ -115,6 +121,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// ヘルプ行の幅超過時の省略（…）を端末幅に合わせる。
 		m.help.Width = m.width
 		m.ready = true
+		return m, nil
+
+	case resolveTickMsg:
+		return m, tea.Batch(m.resolveCmd(), resolveTick())
+
+	case treesTickMsg:
+		return m, tea.Batch(m.treesCmd(), treesTick())
+
+	case resolvedMsg:
+		m.applyResolved(msg)
 		return m, nil
 
 	case treesMsg:
@@ -157,6 +173,8 @@ func (m *model) updateTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.moveSel(1)
 	case kb.Matches(msg, m.keys.Up):
 		return m, m.moveSel(-1)
+	case kb.Matches(msg, m.keys.Refresh):
+		return m, m.treesCmd()
 	}
 	return m, nil
 }
@@ -256,6 +274,28 @@ func (m *model) buildNodes() {
 // 保つためコマンドを返す余地を残している。
 func (m *model) ensureSelection() tea.Cmd {
 	return nil
+}
+
+// applyResolved は再解決の結果（設定・状態）をモデルへ写す。selKey 照合はカーソル移動
+// しか弾けないため、発行から到着までに遅延した古い解決を発行順の世代（seq）で捨てる。
+func (m *model) applyResolved(msg resolvedMsg) {
+	// 等号は許容（同一 seq は来ない設計だが安全側に倒す）。
+	if msg.seq < m.resolveApplied {
+		return
+	}
+	m.resolveApplied = msg.seq
+	if msg.err != nil {
+		m.note, m.noteErr = "再解決に失敗: "+msg.err.Error(), true
+		return
+	}
+	if msg.warn != "" {
+		m.note, m.noteErr = msg.warn, true
+	}
+	if msg.cfg != nil {
+		m.cfg = msg.cfg
+	}
+	m.status = msg.status
+	m.buildNodes()
 }
 
 func clamp(v, lo, hi int) int {
