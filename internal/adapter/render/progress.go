@@ -74,25 +74,32 @@ func noteLine(n worktree.Note) string {
 	}
 }
 
-// serverEventLine は 1 つのサーバーイベントをタグ付きの行に整形する。ライブ表示
-// （Progress.ServerEvent）が使い、最終描画（render.Switch など）はイベントを重複
-// 描画しない — イベントの文言はこの 1 箇所にのみ存在する。EventKind は封印された
-// 列挙のため、未知の値はバグでありパニックさせる。
-func serverEventLine(tag string, ev coreserver.Event) string {
+// ServerEventText は 1 つのサーバーイベントの本文語彙（行頭インデントや改行を含まない）を
+// 返す。CLI/MCP のライブ表示（serverEventLine）と TUI（eventLine）が体裁の違いを被せる
+// 前の同じ本文を共有し、EventKind の網羅チェック（default panic）を一箇所に集める。
+// EventKind は封印された列挙のため、未知の値はバグでありパニックさせる。
+func ServerEventText(ev coreserver.Event) string {
 	switch ev.Kind {
 	case coreserver.EventAlreadyRunning:
-		return fmt.Sprintf("  [%s] 既に起動中 (pid %d)\n", tag, ev.Pid)
+		return fmt.Sprintf("既に起動中 (pid %d)", ev.Pid)
 	case coreserver.EventStoppingOld:
-		return fmt.Sprintf("  [%s] 旧サーバー停止 (pid %d)\n", tag, ev.Pid)
+		return fmt.Sprintf("旧サーバー停止 (pid %d)", ev.Pid)
 	case coreserver.EventStarted:
-		return fmt.Sprintf("  [%s] 起動 (pid %d)\n", tag, ev.Pid)
+		return fmt.Sprintf("起動 (pid %d)", ev.Pid)
 	case coreserver.EventStopped:
-		return fmt.Sprintf("  [%s] 停止 (pid %d)\n", tag, ev.Pid)
+		return fmt.Sprintf("停止 (pid %d)", ev.Pid)
 	case coreserver.EventStopFailed:
-		return fmt.Sprintf("  [%s] 停止失敗 (pid %d): %v（記録は保持されます。再実行で再試行できます）\n", tag, ev.Pid, ev.Err)
+		return fmt.Sprintf("停止失敗 (pid %d): %v（記録は保持されます。再実行で再試行できます）", ev.Pid, ev.Err)
 	case coreserver.EventAlreadyStopped:
-		return fmt.Sprintf("  [%s] 既に停止済み (記録を消去)\n", tag)
+		return "既に停止済み (記録を消去)"
 	default:
 		panic(fmt.Sprintf("unknown coreserver.EventKind %d", ev.Kind))
 	}
+}
+
+// serverEventLine は 1 つのサーバーイベントをタグ付きの行（行頭 2 スペース + 改行）に
+// 整形する。ライブ表示（Progress.ServerEvent）が使い、最終描画（render.Switch など）は
+// イベントを重複描画しない。本文の語彙は ServerEventText に一本化されている。
+func serverEventLine(tag string, ev coreserver.Event) string {
+	return fmt.Sprintf("  [%s] %s\n", tag, ServerEventText(ev))
 }

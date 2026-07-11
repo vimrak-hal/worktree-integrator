@@ -21,9 +21,12 @@ type keyMap struct {
 	Focus kb.Binding // ペイン切替（実キー: tab/left/right/h/l）
 
 	// --- ツリー（左ペイン） ---
-	Up      kb.Binding // 表示は "j/k 選択"（Down と対で 1 項目に見せる）
-	Down    kb.Binding
-	Refresh kb.Binding
+	Up       kb.Binding // 表示は "j/k 選択"（Down と対で 1 項目に見せる）
+	Down     kb.Binding
+	SwitchTo kb.Binding
+	Restart  kb.Binding
+	Stop     kb.Binding
+	Refresh  kb.Binding
 
 	// --- ログ（右ペイン） ---
 	Follow      kb.Binding
@@ -55,9 +58,12 @@ func newKeyMap() keyMap {
 		Quit:  kb.NewBinding(kb.WithKeys("q"), kb.WithHelp("q", "終了")),
 		Focus: kb.NewBinding(kb.WithKeys("tab", "left", "right", "h", "l"), kb.WithHelp("Tab", "ペイン切替")),
 
-		Up:      kb.NewBinding(kb.WithKeys("k", "up"), kb.WithHelp("j/k", "選択")),
-		Down:    kb.NewBinding(kb.WithKeys("j", "down"), kb.WithHelp("j/k", "選択")),
-		Refresh: kb.NewBinding(kb.WithKeys("R"), kb.WithHelp("R", "更新")),
+		Up:       kb.NewBinding(kb.WithKeys("k", "up"), kb.WithHelp("j/k", "選択")),
+		Down:     kb.NewBinding(kb.WithKeys("j", "down"), kb.WithHelp("j/k", "選択")),
+		SwitchTo: kb.NewBinding(kb.WithKeys("enter", "s"), kb.WithHelp("Enter/s", "switch")),
+		Restart:  kb.NewBinding(kb.WithKeys("r"), kb.WithHelp("r", "再起動")),
+		Stop:     kb.NewBinding(kb.WithKeys("x"), kb.WithHelp("x", "stop")),
+		Refresh:  kb.NewBinding(kb.WithKeys("R"), kb.WithHelp("R", "更新")),
 
 		Follow:      kb.NewBinding(kb.WithKeys("f"), kb.WithHelp("f", "追従")),
 		Filter:      kb.NewBinding(kb.WithKeys("/"), kb.WithHelp("/", "フィルタ")),
@@ -118,6 +124,9 @@ func (m *model) contextBindings() []kb.Binding {
 	if m.focus == focusTree {
 		return []kb.Binding{
 			m.keys.Up, // "j/k 選択"
+			m.keys.SwitchTo,
+			m.keys.Restart,
+			m.keys.Stop,
 			m.keys.Refresh,
 			m.keys.FocusToLog,
 			m.keys.Quit,
