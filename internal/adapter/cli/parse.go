@@ -125,7 +125,8 @@ func (HelpShown) isInvocation()   {}
 // Parse は args（プログラム名を除く）を Invocation へと解析する。サブコマンドのない
 // 素の `worktree-integrator <name>` の形式は `create <name>` として扱われる。素の名前が
 // 予約語（現行および将来のサブコマンド名）と衝突する場合は、`create` の明示を促す
-// エラーを返す。
+// エラーを返す。引数を一切与えない `worktree-integrator`（`wt`）は、lazygit などと
+// 同様に UI を開く（`wt ui` と同じ RunUI）。
 func Parse(args []string) (Invocation, error) {
 	// result はサブコマンドが解決するまで nil のまま。正常な Execute の後も nil で
 	// あれば、cobra が --help / --version（または未指定サブコマンドのヘルプ）を
@@ -139,7 +140,11 @@ func Parse(args []string) (Invocation, error) {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return fmt.Errorf("worktree 名を指定してください（例: worktree-integrator <name>）")
+			// lazygit などと同様、引数なしは最も対話的なフロントエンドである UI を
+			// 開く（`wt ui` と同一の RunUI 起動要求）。worktree 作成は素の名前
+			// （`wt <name>`）で従来どおり injectCreate が create へ回す。
+			result = RunUI{}
+			return nil
 		},
 	}
 	// そうしないと Cobra は `completion` サブコマンドを自動登録してしまい、

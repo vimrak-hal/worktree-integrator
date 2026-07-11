@@ -14,7 +14,7 @@ wt server logs   [<name>] [--repo <repo>]... [-n N] [-f] [--prev]
 wt alias set <name> <label> | wt alias list | wt alias remove <name>
 wt doctor [--fix] [--json]
 wt config check
-wt ui
+wt ui                    # 引数なしの `wt` でも開く
 wt mcp
 ```
 
@@ -194,7 +194,7 @@ wt config check
 ## `ui` — ターミナル UI
 
 ```sh
-wt ui
+wt ui   # 引数なしの `wt` だけでも同じ画面が開く
 ```
 
 左のツリー（worktree → サーバー）で対象を選び、右でそのログを読む 2 ペインの

@@ -353,6 +353,15 @@ func TestUIInvocation(t *testing.T) {
 	}
 }
 
+// 引数を一切与えない起動は `wt ui` と同じ RunUI を返す（lazygit などと同様、素の
+// 起動は UI を開く）。素の名前（`wt <name>`）が create へ回る挙動は別テストで固定
+// 済みのため、ここでは「引数なし → RunUI」だけを固定する。
+func TestBareInvocationOpensUI(t *testing.T) {
+	if _, ok := parse(t).(RunUI); !ok {
+		t.Fatalf("expected RunUI for a bare invocation, got %T", parse(t))
+	}
+}
+
 // `config check` は ConfigCheck を返す。config は既知のサブコマンドであり
 // （予約語ではない）、引数無しの `config` は cobra のヘルプに落ちる。
 func TestConfigCheckInvocation(t *testing.T) {
