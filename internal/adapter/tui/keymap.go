@@ -3,6 +3,7 @@ package tui
 import (
 	"github.com/charmbracelet/bubbles/help"
 	kb "github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -17,8 +18,9 @@ import (
 // であり、実効キーには影響しない。
 type keyMap struct {
 	// --- 共通（フォーカスやプロンプトに依らず効く） ---
-	Quit  kb.Binding
-	Focus kb.Binding // ペイン切替（実キー: tab/left/right/h/l）
+	Quit   kb.Binding
+	Focus  kb.Binding // ペイン切替（実キー: tab/left/right/h/l）
+	Doctor kb.Binding
 
 	// --- ツリー（左ペイン） ---
 	Up       kb.Binding // 表示は "j/k 選択"（Down と対で 1 項目に見せる）
@@ -26,6 +28,9 @@ type keyMap struct {
 	SwitchTo kb.Binding
 	Restart  kb.Binding
 	Stop     kb.Binding
+	New      kb.Binding
+	Delete   kb.Binding
+	Alias    kb.Binding
 	Refresh  kb.Binding
 
 	// --- ログ（右ペイン） ---
@@ -41,8 +46,12 @@ type keyMap struct {
 	LineUp      kb.Binding // 表示は "j/k スクロール"
 	ClearFilter kb.Binding
 
-	// --- フィルタ（表示にも matching にも使う） ---
+	// --- フィルタ・doctor 結果（表示にも matching にも使う） ---
+	// 作成・別名・削除の各モーダルは huh フォームへ移したため、切替（space）・全選択
+	// （a）・削除確認（y）といったモーダル専用キーはここには持たない（huh が担う）。
 	Confirm kb.Binding
+	Cancel  kb.Binding
+	Fix     kb.Binding
 
 	// --- 表示専用（フォーカス切替の文脈別ラベル） ---
 	// 現行 helpLine の「Tab→ログ」「Tab→ツリー」という文脈依存ラベルを再現する。
@@ -55,14 +64,18 @@ type keyMap struct {
 // newKeyMap は全バインドを構築する。
 func newKeyMap() keyMap {
 	return keyMap{
-		Quit:  kb.NewBinding(kb.WithKeys("q"), kb.WithHelp("q", "終了")),
-		Focus: kb.NewBinding(kb.WithKeys("tab", "left", "right", "h", "l"), kb.WithHelp("Tab", "ペイン切替")),
+		Quit:   kb.NewBinding(kb.WithKeys("q"), kb.WithHelp("q", "終了")),
+		Focus:  kb.NewBinding(kb.WithKeys("tab", "left", "right", "h", "l"), kb.WithHelp("Tab", "ペイン切替")),
+		Doctor: kb.NewBinding(kb.WithKeys("!"), kb.WithHelp("!", "doctor")),
 
 		Up:       kb.NewBinding(kb.WithKeys("k", "up"), kb.WithHelp("j/k", "選択")),
 		Down:     kb.NewBinding(kb.WithKeys("j", "down"), kb.WithHelp("j/k", "選択")),
 		SwitchTo: kb.NewBinding(kb.WithKeys("enter", "s"), kb.WithHelp("Enter/s", "switch")),
 		Restart:  kb.NewBinding(kb.WithKeys("r"), kb.WithHelp("r", "再起動")),
 		Stop:     kb.NewBinding(kb.WithKeys("x"), kb.WithHelp("x", "stop")),
+		New:      kb.NewBinding(kb.WithKeys("n"), kb.WithHelp("n", "作成")),
+		Delete:   kb.NewBinding(kb.WithKeys("D"), kb.WithHelp("D", "削除")),
+		Alias:    kb.NewBinding(kb.WithKeys("a"), kb.WithHelp("a", "別名")),
 		Refresh:  kb.NewBinding(kb.WithKeys("R"), kb.WithHelp("R", "更新")),
 
 		Follow:      kb.NewBinding(kb.WithKeys("f"), kb.WithHelp("f", "追従")),
@@ -78,6 +91,8 @@ func newKeyMap() keyMap {
 		ClearFilter: kb.NewBinding(kb.WithKeys("esc"), kb.WithHelp("esc", "解除")),
 
 		Confirm: kb.NewBinding(kb.WithKeys("enter"), kb.WithHelp("Enter", "確定/実行")),
+		Cancel:  kb.NewBinding(kb.WithKeys("esc"), kb.WithHelp("Esc", "中止/閉じる")),
+		Fix:     kb.NewBinding(kb.WithKeys("F"), kb.WithHelp("F", "--fix 実行")),
 
 		FocusToLog:  kb.NewBinding(kb.WithKeys("tab"), kb.WithHelp("Tab", "→ログ")),
 		FocusToTree: kb.NewBinding(kb.WithKeys("tab"), kb.WithHelp("Tab", "→ツリー")),
@@ -111,14 +126,50 @@ func staticHelp(keyLabel, desc string) kb.Binding {
 	return kb.NewBinding(kb.WithKeys("\x00"), kb.WithHelp(keyLabel, desc))
 }
 
-// contextBindings は現在の文脈（フィルタ / フォーカス）で表示すべきキーヘルプの並びを
-// 返す。項目・順序・日本語ラベルは移行前の helpLine を踏襲する。
+// contextBindings は現在の文脈（プロンプト各種 / doctor 結果 / フォーカス）で表示すべき
+// キーヘルプの並びを返す。項目・順序・日本語ラベルは移行前の helpLine を踏襲する。
 func (m *model) contextBindings() []kb.Binding {
+	// huh フォーム表示中は huh の操作を日本語で要約する（キーの実処理は huh 側。ここは
+	// 表示専用）。フォーカス中フィールドの型で並びを出し分け、Input・Confirm・
+	// MultiSelect で実際に効くキーだけを見せる。
+	if m.form != nil {
+		switch m.form.GetFocusedField().(type) {
+		case *huh.Input:
+			return []kb.Binding{
+				staticHelp("Tab/Enter", "次へ"),
+				staticHelp("Shift+Tab", "戻る"),
+				staticHelp("Esc", "中止"),
+			}
+		case *huh.Confirm:
+			return []kb.Binding{
+				staticHelp("←/→", "選択"),
+				staticHelp("Enter", "確定"),
+				staticHelp("Esc", "中止"),
+			}
+		default:
+			// MultiSelect（作成先リポジトリ選択）ほか。
+			return []kb.Binding{
+				staticHelp("↑/↓", "移動"),
+				staticHelp("space/x", "選択"),
+				staticHelp("ctrl+a", "全選択"),
+				staticHelp("Enter", "確定"),
+				staticHelp("Esc", "中止"),
+			}
+		}
+	}
 	if m.prompt == promptFilter {
 		return []kb.Binding{
 			staticHelp("入力でフィルタ", ""),
 			withHelp(m.keys.Confirm, "Enter", "確定"),
 			withHelp(m.keys.ClearFilter, "Esc", "解除"),
+		}
+	}
+	if m.doctorMode {
+		return []kb.Binding{
+			m.keys.Fix,
+			withHelp(m.keys.LineUp, "j/k", "スクロール"),
+			withHelp(m.keys.Top, "g/G", "先頭/末尾"),
+			withHelp(m.keys.Cancel, "Esc", "閉じる"),
 		}
 	}
 	if m.focus == focusTree {
@@ -127,6 +178,10 @@ func (m *model) contextBindings() []kb.Binding {
 			m.keys.SwitchTo,
 			m.keys.Restart,
 			m.keys.Stop,
+			m.keys.New,
+			m.keys.Delete,
+			m.keys.Alias,
+			m.keys.Doctor,
 			m.keys.Refresh,
 			m.keys.FocusToLog,
 			m.keys.Quit,

@@ -10,7 +10,9 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
 
+	"github.com/vimrak-hal/worktree-integrator/internal/app"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/server"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/tree"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/config"
@@ -148,8 +150,27 @@ type model struct {
 	resolveSeq     uint64
 	resolveApplied uint64
 
-	// --- モーダル ---
+	// --- モーダル・結果ペイン ---
 	prompt promptMode
+	// promptTarget は alias / remove フォームの対象 worktree 名（フォームを開いた
+	// 時点のカーソル位置を固定して保持する）。
+	promptTarget string
+	repos        *app.ReposResult
+
+	// --- huh フォーム（作成・別名・削除確認） ---
+	// form が非 nil の間はキー入力をフォームが最優先で消費する。formKind はどの
+	// フォームかを表し、完了時に finishForm が値を取り出して dispatch する。値は
+	// 各 form* フィールドへポインタでバインドされる。
+	form        *huh.Form
+	formKind    formKind
+	formName    string
+	formRepos   []string
+	formAlias   string
+	formConfirm bool
+	// doctorText / doctorMode は doctor 結果の右ペイン表示。doctorMode 中は vp の
+	// 内容が doctorText になる（rebuildLog が出し分ける）。
+	doctorText []string
+	doctorMode bool
 
 	// opRunning 中は新しい統合操作を受け付けない（1 つずつ実行する）。
 	opRunning bool
@@ -193,6 +214,13 @@ func (m *model) Init() tea.Cmd {
 // 24〜40 桁に収める。
 func (m *model) leftW() int {
 	return clamp(m.width/3, 24, 40)
+}
+
+// rightW は右ペイン（ログ・フォーム）の表示幅。左ペインと区切り "│" を除いた残り。
+// ビューポート幅（Update の WindowSizeMsg で決まる幅）と同じ計算で、huh フォームの
+// 幅指定にも使う。
+func (m *model) rightW() int {
+	return max(1, m.width-m.leftW()-1)
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -251,6 +279,23 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rebuildLog()
 		return m, nil
 
+	case reposMsg:
+		if m.form != nil || m.opRunning {
+			// 別フォーム表示中・操作実行中に届いた候補は古い（または重複した）要求のもの。
+			// 開いているフォームを作成フォームで潰さないよう黙って破棄する。
+			return m, nil
+		}
+		if msg.err != nil {
+			m.note, m.noteErr = "リポジトリ一覧の取得に失敗: "+msg.err.Error(), true
+			return m, nil
+		}
+		m.repos = msg.res
+		m.formName = ""
+		m.formRepos = nil
+		m.form = newCreateForm(msg.res.Repos, &m.formName, &m.formRepos, m.rightW())
+		m.formKind = formCreate
+		return m, m.form.Init()
+
 	case eventMsg:
 		m.events = append(m.events, msg.line)
 		if len(m.events) > maxEvents {
@@ -265,10 +310,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.note = msg.summary + "（" + msg.err.Error() + "）"
 		}
+		if len(msg.doctorText) > 0 {
+			m.doctorText = msg.doctorText
+			m.doctorMode = true
+			m.rebuildLog()
+			// 直前のログ閲覧の YOffset を引き継ぐと、長い診断結果が途中／末尾から
+			// 表示される。診断は必ず先頭から読ませる。
+			m.vp.GotoTop()
+		}
 		if m.quitAfterOp {
 			return m, tea.Quit
 		}
-		// 切り替え・停止で状態・一覧・ログパスが変わったはずなので、即座に再解決する。
+		// 切り替え・停止・作成・削除で状態・一覧・ログパスが変わったはずなので、
+		// 即座に再解決する。
 		return m, tea.Batch(m.resolveCmd(), m.treesCmd())
 
 	case tea.MouseMsg:
@@ -283,18 +337,42 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.updateKey(msg)
 	}
+	// huh フォームは Enter などのキーを内部メッセージ（次フィールドへ・確定）に変換し、
+	// コマンド経由で自分宛てに送り返してくる。KeyMsg 以外のそれらもフォームへ届けないと
+	// 確定が永遠に完了しない。
+	if m.form != nil {
+		return m.updateForm(msg)
+	}
 	return m, nil
 }
 
-// updateKey はキー入力をさばく。モーダル（プロンプト）を最優先で処理し、その後に
-// グローバル・ペイン別のキーへ落とす。
+// updateKey はキー入力をさばく。モーダル（プロンプト）と結果ペイン（doctor）を
+// 最優先で処理し、その後にグローバル・ペイン別のキーへ落とす。
 func (m *model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyCtrlC {
 		return m, tea.Quit
 	}
 
+	// huh フォーム表示中は Ctrl-C 以外の全キーをフォームが消費する。ただし Esc は
+	// この層で横取りする: MultiSelect のフィルタ入力中だけは huh に渡し（フィルタ
+	// 確定/解除）、それ以外は TUI がフォーム中止として畳む。huh の KeyMap.Quit に esc を
+	// 足す方式だと、フィルタ入力中の Esc までフォーム全体の中止に化けて入力済みの内容が
+	// 消えるため、フォーカス中フィールドの状態をここで判定する。
+	if m.form != nil {
+		if msg.Type == tea.KeyEsc && !formFiltering(m.form) {
+			m.form = nil
+			m.formKind = formNone
+			return m, nil
+		}
+		return m.updateForm(msg)
+	}
+
 	if m.prompt == promptFilter {
 		return m.updateFilterKey(msg)
+	}
+
+	if m.doctorMode {
+		return m.updateDoctorKey(msg)
 	}
 
 	switch {
@@ -309,6 +387,8 @@ func (m *model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case kb.Matches(msg, m.keys.Focus):
 		m.toggleFocus()
 		return m, nil
+	case kb.Matches(msg, m.keys.Doctor):
+		return m.startOp("doctor", m.doctorCmd(false))
 	}
 
 	if m.focus == focusTree {
@@ -362,6 +442,31 @@ func (m *model) updateFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// updateDoctorKey は doctor 結果ペイン中のキー操作。q は終了ではなく結果を閉じる。
+func (m *model) updateDoctorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case kb.Matches(msg, m.keys.Cancel), kb.Matches(msg, m.keys.Quit):
+		m.doctorMode = false
+		m.doctorText = nil
+		m.rebuildLog()
+	case kb.Matches(msg, m.keys.Fix):
+		return m.startOp("doctor", m.doctorCmd(true))
+	case kb.Matches(msg, m.keys.LineDown):
+		m.vp.ScrollDown(1)
+	case kb.Matches(msg, m.keys.LineUp):
+		m.vp.ScrollUp(1)
+	case kb.Matches(msg, m.keys.HalfDown):
+		m.vp.HalfPageDown()
+	case kb.Matches(msg, m.keys.HalfUp):
+		m.vp.HalfPageUp()
+	case kb.Matches(msg, m.keys.Top):
+		m.vp.GotoTop()
+	case kb.Matches(msg, m.keys.Bottom):
+		m.vp.GotoBottom()
+	}
+	return m, nil
+}
+
 // updateTreeKey は左ペイン（ツリー）にフォーカスがあるときのキー操作。
 func (m *model) updateTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
@@ -383,6 +488,32 @@ func (m *model) updateTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case kb.Matches(msg, m.keys.Refresh):
 		return m, m.treesCmd()
+	case kb.Matches(msg, m.keys.New):
+		if m.opRunning {
+			// フォームを入力し終えてから弾かれる無駄を防ぐため、候補取得の発行前に
+			// opRunning を弾く。R（treesCmd）は読み取り専用なのでガード不要。
+			m.note, m.noteErr = "別の操作を実行中です", true
+			return m, nil
+		}
+		// reposMsg 受信で作成フォームを開く（名前とリポジトリ選択は 1 枚のフォームに
+		// 統合されている）。
+		return m, m.reposCmd()
+	case kb.Matches(msg, m.keys.Delete):
+		if wt, ok := m.selectedWorktree(); ok {
+			m.promptTarget = wt
+			m.formConfirm = false
+			m.form = newRemoveForm(wt, &m.formConfirm, m.rightW())
+			m.formKind = formRemove
+			return m, m.form.Init()
+		}
+	case kb.Matches(msg, m.keys.Alias):
+		if wt, ok := m.selectedWorktree(); ok {
+			m.promptTarget = wt
+			m.formAlias = m.selectedAlias()
+			m.form = newAliasForm(&m.formAlias, m.rightW())
+			m.formKind = formAlias
+			return m, m.form.Init()
+		}
 	}
 	return m, nil
 }
@@ -462,6 +593,21 @@ func (m *model) selectedWorktree() (string, bool) {
 		return "", false
 	}
 	return m.nodes[m.sel].wt, true
+}
+
+// selectedAlias はカーソル位置の worktree の現在の別名を返す（alias プロンプトの
+// プリフィル用）。
+func (m *model) selectedAlias() string {
+	wt, ok := m.selectedWorktree()
+	if !ok {
+		return ""
+	}
+	for _, n := range m.nodes {
+		if n.isWorktree() && n.wt == wt {
+			return n.alias
+		}
+	}
+	return ""
 }
 
 // buildNodes は trees・設定のサーバー定義・status から nodes を再構築する。各 worktree
@@ -687,9 +833,22 @@ func (m *model) pollTail() bool {
 	return true
 }
 
-// rebuildLog は現在の選択・フィルタからビューポートの内容を組み立て直す。
+// rebuildLog は現在の選択・フィルタ（または doctor 結果）からビューポートの内容を
+// 組み立て直す。
 func (m *model) rebuildLog() {
 	if !m.ready {
+		return
+	}
+	if m.doctorMode {
+		lines := m.doctorText
+		if m.wrap {
+			wrapped := make([]string, len(lines))
+			for i, l := range lines {
+				wrapped[i] = wrapDisplay(l, m.vp.Width)
+			}
+			lines = wrapped
+		}
+		m.vp.SetContent(strings.Join(lines, "\n"))
 		return
 	}
 	if m.curKey == "" {

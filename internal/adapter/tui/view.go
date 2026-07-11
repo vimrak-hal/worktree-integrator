@@ -11,8 +11,9 @@ import (
 const visibleEvents = 6
 
 // View は現在のモデルを 1 画面に描画する。レイアウトは lazygit 風の 2 ペイン: 固定 3 行の
-// クローム（ペインタイトル行・note 行・ヘルプ行）と、その間の本文（左=ツリー、右=ログ）を
-// "│" で縦に区切る。本文の高さはビューポートと同じ height-3 に揃える。
+// クローム（ペインタイトル行・note 行・ヘルプ行）と、その間の本文（左=ツリー、右=ログ／
+// doctor 結果／作成モーダル）を "│" で縦に区切る。本文の高さはビューポートと同じ
+// height-3 に揃える。
 func (m *model) View() string {
 	if !m.ready {
 		return "起動中…"
@@ -57,8 +58,24 @@ func (m *model) paneTitle(label string, f focusID) string {
 }
 
 // logTitle は右ペインの見出し: 対象（repo/server @ worktree）と、モードのフラグ
-// （追従・前世代・フィルタ／入力中の input.View()）。
+// （追従・前世代・フィルタ／入力中の input.View()）。doctor 結果表示中は専用の見出し。
 func (m *model) logTitle() string {
+	if m.form != nil {
+		// フォーム表示中は種類ごとの見出しに切り替える。
+		label := " 入力中 "
+		switch m.formKind {
+		case formCreate:
+			label = " worktree 作成 "
+		case formAlias:
+			label = " 別名 "
+		case formRemove:
+			label = " 削除の確認 "
+		}
+		return m.paneTitle(label, focusLog)
+	}
+	if m.doctorMode {
+		return m.paneTitle(" doctor 結果 ", focusLog)
+	}
 	label := " ログ "
 	if m.curKey != "" {
 		if wt, repo, srv, ok := splitKey(m.curKey); ok {
@@ -116,7 +133,7 @@ func (m *model) treeLines(h int) []string {
 	case m.trees == nil:
 		nodeLines = []string{"読み込み中…"}
 	case len(m.nodes) == 0:
-		nodeLines = []string{"worktree がありません"}
+		nodeLines = []string{"worktree がありません（n で作成）"}
 	default:
 		nodeLines = make([]string, len(m.nodes))
 		for i, n := range m.nodes {
@@ -203,8 +220,13 @@ func markColored(n node) string {
 	}
 }
 
-// rightLines は右ペインの行を返す（ビューポートのログ表示）。
+// rightLines は右ペインの行を返す。huh フォーム表示中はフォームを、それ以外は
+// ビューポート（ログ／doctor 結果）を描く。フォームは通常時のみ開くため doctor
+// 結果より優先してよい。
 func (m *model) rightLines() []string {
+	if m.form != nil {
+		return strings.Split(m.form.View(), "\n")
+	}
 	return strings.Split(m.vp.View(), "\n")
 }
 

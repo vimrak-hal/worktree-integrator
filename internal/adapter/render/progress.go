@@ -26,14 +26,14 @@ func NewProgress(w io.Writer) *Progress {
 func (p *Progress) Update(repo string, state worktree.Progress) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	tagged(p.w, repo, "%s", progressLabel(state))
+	tagged(p.w, repo, "%s", ProgressLabel(state))
 }
 
 // Event は repo の型付き途中経過イベントを 1 行で書き出す。
 func (p *Progress) Event(repo string, n worktree.Note) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	tagged(p.w, repo, "%s", noteLine(n))
+	tagged(p.w, repo, "%s", NoteLine(n))
 }
 
 // ServerEvent はサーバーのライフサイクルイベントを repo/server タグ付きの 1 行で
@@ -44,9 +44,11 @@ func (p *Progress) ServerEvent(repo, server string, ev coreserver.Event) {
 	fmt.Fprint(p.w, serverEventLine(repo+"/"+server, ev))
 }
 
-// progressLabel は worktree の進捗状態をユーザー向けの（日本語の）ラベルに変換する。
-// Progress は封印された列挙（途中経過のみ）のため、未知の値はバグでありパニックさせる。
-func progressLabel(state worktree.Progress) string {
+// ProgressLabel は worktree の進捗状態をユーザー向けの（日本語の）ラベルに変換する。
+// CLI/MCP/TUI が同じ語彙を共有し、封印された列挙の網羅チェック（default panic）を
+// 一箇所に集めるためにエクスポートする。Progress は封印された列挙（途中経過のみ）の
+// ため、未知の値はバグでありパニックさせる。
+func ProgressLabel(state worktree.Progress) string {
 	switch state {
 	case worktree.ProgressFetching:
 		return "fetch中"
@@ -57,9 +59,10 @@ func progressLabel(state worktree.Progress) string {
 	}
 }
 
-// noteLine は型付き途中経過イベントをユーザー向けの 1 行に変換する。NoteKind は
-// 封印された列挙のため、未知の値はバグでありパニックさせる。
-func noteLine(n worktree.Note) string {
+// NoteLine は型付き途中経過イベントをユーザー向けの 1 行に変換する。CLI/MCP/TUI が
+// 同じ語彙を共有し、封印された列挙の網羅チェック（default panic）を一箇所に集めるために
+// エクスポートする。NoteKind は封印された列挙のため、未知の値はバグでありパニックさせる。
+func NoteLine(n worktree.Note) string {
 	switch n.Kind {
 	case worktree.NoteCopyRejected:
 		return fmt.Sprintf("コピー対象をスキップ（不正なパス）: %s", n.Path)
