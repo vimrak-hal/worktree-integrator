@@ -19,6 +19,7 @@ import (
 	"github.com/vimrak-hal/worktree-integrator/internal/core/git/worktree"
 	coreserver "github.com/vimrak-hal/worktree-integrator/internal/core/server"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/childio"
+	"github.com/vimrak-hal/worktree-integrator/internal/infra/procctl"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/statedir"
 )
 
@@ -136,7 +137,7 @@ func buildApp(cfg *config.File, root statedir.Root, fw *forwarder) *app.App {
 		Config:   cfg,
 		Root:     root,
 		ChildIO:  quiet,
-		Proc:     coreserver.NewUnixProcess(quiet),
+		Proc:     procctl.NewUnixProcess(quiet),
 		Selector: nil,
 		Progress: fw,
 	}

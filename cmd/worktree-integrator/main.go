@@ -34,8 +34,8 @@ import (
 	"github.com/vimrak-hal/worktree-integrator/internal/app"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/config"
-	coreserver "github.com/vimrak-hal/worktree-integrator/internal/core/server"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/childio"
+	"github.com/vimrak-hal/worktree-integrator/internal/infra/procctl"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/statedir"
 )
 
@@ -104,7 +104,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		Config:  file,
 		Root:    root,
 		ChildIO: childio.Inherit(),
-		Proc:    coreserver.NewUnixProcess(childio.Inherit()),
+		Proc:    procctl.NewUnixProcess(childio.Inherit()),
 		// 非 TTY（パイプ・CI）では nil になり、対話選択を要する create は
 		// 「--repo か --all を指定してください」エラーになる。
 		Selector: cli.InteractiveSelector(),

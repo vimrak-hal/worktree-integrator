@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vimrak-hal/worktree-integrator/internal/core/wtenv"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/proc"
 )
 
@@ -97,14 +96,14 @@ func (f *Fake) LastGrace() time.Duration {
 	return f.lastGrace
 }
 
-func (f *Fake) RunForeground(_ context.Context, script, _ string, _ []wtenv.Pair) (bool, error) {
+func (f *Fake) RunForeground(_ context.Context, script, _ string, _ []string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.foregroundRuns = append(f.foregroundRuns, script)
 	return f.foregroundOK, nil
 }
 
-func (f *Fake) SpawnDetached(script, _ string, _ []wtenv.Pair, _ string) (proc.Ident, error) {
+func (f *Fake) SpawnDetached(script, _ string, _ []string, _ string) (proc.Ident, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.nextPID++

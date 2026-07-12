@@ -71,6 +71,9 @@ const startupWatch = 500 * time.Millisecond
 // logTailLines は即死検出の StartError に添えるログ末尾の行数。
 const logTailLines = 20
 
+// pollInterval は、起動直後の即死監視（watchStartup）で Alive をポーリングする間隔。
+const pollInterval = 50 * time.Millisecond
+
 // Status は status 向けの、1 つのサーバーの現在のランタイム状態を表す。
 type Status int
 
@@ -179,7 +182,10 @@ type SwitchRequest struct {
 // 停止に失敗した場合は新プロセスを起動しない（二重起動を作らない）。
 func SwitchServer(ctx context.Context, pc ProcessControl, runtime *Runtime, req *SwitchRequest) (SwitchResult, error) {
 	worktree := req.Run.WorktreeName
-	env := serverEnv(req.Run, req.Repo, req.ServerName)
+	// ライフサイクルコマンドとサーバー起動へ渡す環境を合成する。ドメイン語彙の
+	// WT_* ペアを継承環境（os.Environ()）に重ねて "KEY=VALUE" のスライスへ落とし込み、
+	// ProcessControl（core を知らない infra 実装）へはこの合成済みの形で渡す。
+	env := wtenv.Environ(os.Environ(), serverEnv(req.Run, req.Repo, req.ServerName))
 	// 初回判定は記録と現実の両方で行う: setup の記録があっても、その実行先の
 	// パスが消えていれば（worktree が削除・再作成されていれば）初回として扱う。
 	rec, recorded := runtime.Setup[worktree]

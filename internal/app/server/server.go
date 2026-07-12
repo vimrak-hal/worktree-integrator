@@ -30,7 +30,7 @@ import (
 
 // Deps は server ワークフロー群の依存の束。App が自身のフィールドから構築する。
 type Deps struct {
-	// Proc はプロセス制御のバックエンド（本番: UnixProcess、テスト: serverfake）。
+	// Proc はプロセス制御のバックエンド（本番: procctl.UnixProcess、テスト: serverfake）。
 	Proc coreserver.ProcessControl
 	// Store は状態ストア。
 	Store *coreserver.StateStore

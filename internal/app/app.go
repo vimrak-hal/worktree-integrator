@@ -50,7 +50,7 @@ type App struct {
 	// ChildIO はフック・サーバーライフサイクルコマンドの子プロセスに与える標準
 	// ストリーム（CLI: Inherit / MCP: Quiet）。
 	ChildIO childio.Streams
-	// Proc はプロセス制御のバックエンド（本番: coreserver.NewUnixProcess）。
+	// Proc はプロセス制御のバックエンド（本番: procctl.NewUnixProcess）。
 	Proc coreserver.ProcessControl
 	// Selector は create の対話的リポジトリ選択。nil = 非対話（MCP と、非 TTY の
 	// CLI）。非対話の create は --repo / --all の明示が必須になる。

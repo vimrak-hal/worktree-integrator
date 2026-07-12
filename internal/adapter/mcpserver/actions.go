@@ -13,8 +13,8 @@ import (
 	"github.com/vimrak-hal/worktree-integrator/internal/app/server"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/tree"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/config"
-	coreserver "github.com/vimrak-hal/worktree-integrator/internal/core/server"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/childio"
+	"github.com/vimrak-hal/worktree-integrator/internal/infra/procctl"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/statedir"
 )
 
@@ -45,7 +45,7 @@ func newToolApp() (*toolApp, error) {
 		Config:  file,
 		Root:    root,
 		ChildIO: childio.Quiet(),
-		Proc:    coreserver.NewUnixProcess(childio.Quiet()),
+		Proc:    procctl.NewUnixProcess(childio.Quiet()),
 		// Selector は nil（非対話）。対話選択モードに入る呼び出しはエラーになる。
 		Selector: nil,
 		Progress: render.NewProgress(&t.buf),

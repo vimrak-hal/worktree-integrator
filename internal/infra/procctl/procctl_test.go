@@ -1,4 +1,4 @@
-package server_test
+package procctl_test
 
 import (
 	"context"
@@ -8,15 +8,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vimrak-hal/worktree-integrator/internal/core/server"
-	"github.com/vimrak-hal/worktree-integrator/internal/core/wtenv"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/childio"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/proc"
+	"github.com/vimrak-hal/worktree-integrator/internal/infra/procctl"
 )
 
 // quietProc は、テスト中に標準出力を汚さない UnixProcess を返す。
-func quietProc() *server.UnixProcess {
-	return server.NewUnixProcess(childio.Quiet())
+func quietProc() *procctl.UnixProcess {
+	return procctl.NewUnixProcess(childio.Quiet())
 }
 
 // TestRunForegroundExitCodes は、実プロセスでの成功（exit 0）と 0 以外の終了（exit 1）を確認する。
@@ -41,12 +40,13 @@ func TestRunForegroundExitCodes(t *testing.T) {
 	}
 }
 
-// TestRunForegroundRunsInCwdWithEnv は、コマンドが cwd で実行され WT_* 環境変数が
-// 渡されることを、ファイルへの書き出しで確認する。
+// TestRunForegroundRunsInCwdWithEnv は、コマンドが cwd で実行され合成済みの環境変数が
+// 渡されることを、ファイルへの書き出しで確認する。env は呼び出し側が合成した
+// "KEY=VALUE" のスライスであり、そのまま子プロセスへ渡る。
 func TestRunForegroundRunsInCwdWithEnv(t *testing.T) {
 	p := quietProc()
 	dir := t.TempDir()
-	env := []wtenv.Pair{{Key: "WT_PROBE", Value: "hello"}}
+	env := append(os.Environ(), "WT_PROBE=hello")
 
 	// cwd 内の out.txt に環境変数を書き出す。
 	ok, err := p.RunForeground(t.Context(), `printf '%s' "$WT_PROBE" > out.txt`, dir, env)
@@ -142,7 +142,8 @@ func TestSpawnDetachedRotatesPreviousLog(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = p.StopGroup(context.Background(), id, time.Second) })
 
-	prev, err := os.ReadFile(server.PrevLogPath(log))
+	// ローテート先はこの実装の規約（logPath + ".prev"）。
+	prev, err := os.ReadFile(log + ".prev")
 	if err != nil {
 		t.Fatalf("previous generation should be rotated aside: %v", err)
 	}
