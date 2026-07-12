@@ -59,6 +59,21 @@ worktree-integrator の調子が悪いので調べて
 
 のように依頼すると、Claude が必要に応じてこのエージェントを起動します。
 
+## hooks 設定エージェント
+
+ライフサイクルフック（[Hooks](hooks.md)、config.toml の `[[hooks.*]]`）の設計・記述・
+検証を専門に行うエージェント `worktree-integrator-hooks` も収録されています。
+タイミング（`before` / `after_worktree` / `after`）や `WT_*` 環境変数の選択、
+失敗時の方針（`allow_failure` / `timeout_secs`）を踏まえて設定を組み立て、既存の
+config.toml を壊さずにマージし、`config check` による検証まで行います
+（hooks 以外の設定には触れません）。
+
+```
+worktree 作成後に npm ci を流すようにして
+```
+
+のように依頼すると、Claude が必要に応じてこのエージェントを起動します。
+
 ## プラグインのアップデート
 
 リポジトリ側の更新を取り込むには 2 段階の操作が必要です（自動更新はされません）:

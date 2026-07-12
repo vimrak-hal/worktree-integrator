@@ -211,39 +211,24 @@ setup = ["npm ci"]
 
 ### 3d. hooks（任意）
 
-worktree 作成ワークフローの各タイミングで任意のシェルコマンドを実行する。同じ
-タイミングの hooks は**並列**実行。`[[hooks.<timing>]]` の配列テーブルで書く。
-
-タイミング: `before`（全体で1回・リポジトリ探索前）/ `after_worktree`（作成された
-worktree ごとに1回・その worktree 内）/ `after`（全体で1回・全処理後。`enter` でも実行）。
-
-| キー | 必須/既定 | 説明 |
-| --- | --- | --- |
-| `name` | **必須** | 進捗・サマリ表示名 |
-| `command` | **必須** | `sh -c` で解釈。単一文字列か文字列配列（逐次実行） |
-| `allow_failure` | `false` | `true` で失敗しても全体は失敗扱いにせず警告どまり |
-| `workdir` | 任意 | 作業ディレクトリの明示指定。未指定時は各タイミングの既定 |
-| `timeout_secs` | 無制限 | このコマンドの最大実行時間（秒）。超過すると失敗扱い |
-
-> `background`（旧キー）は**廃止済みで、指定するとパースエラーになる**。常駐プロセスは
-> hooks ではなく `[repos.<name>.servers.<server>]`（3c）で管理する。
+worktree 作成ワークフローの各タイミング（`before` / `after_worktree` / `after`）で
+任意のシェルコマンドを実行する。`[[hooks.<timing>]]` の配列テーブルで書く。
+代表例:
 
 ```toml
 [[hooks.after_worktree]]
 name    = "setup"
 command = ["npm ci", "npm run build"]
-
-[[hooks.after]]
-name          = "notify"
-command       = "notify-send \"worktree $WT_WORKTREE_NAME 作成完了\""
-allow_failure = true
 ```
 
-> `before` hook の失敗（`allow_failure` 未指定）はリポジトリ処理前に中断する。
-> `after_worktree` / `after` の失敗は処理を続けつつ終了コードを非ゼロにする。
+> `background`（旧キー）は**廃止済みで、指定するとパースエラーになる**。常駐プロセスは
+> hooks ではなく `[repos.<name>.servers.<server>]`（3c）で管理する。
 
-すぐ使える hook のサンプルは本体リポジトリの `examples/hooks/`
-（`cmux-jira-title.sh` / `cmux-open-worktree.sh`）にある。
+hooks の設計（タイミング選択・`WT_*` 環境変数・失敗方針・timeout・既存設定への
+マージ・検証）は、同梱の専門エージェント **worktree-integrator-hooks** に任せるのが
+早い。キー一覧が必要なだけなら [config-reference](references/config-reference.md) の
+`[[hooks.<timing>]]` 節を参照する。すぐ使えるサンプルは本体リポジトリの
+`examples/hooks/`（`cmux-jira-title.sh` / `cmux-open-worktree.sh`）にある。
 
 ### 3e. 追加ファイルのコピー `[defaults.copy]` / `[repos.<name>.copy]`（任意）
 
@@ -355,4 +340,5 @@ allow_failure = true
 | 旧設定ファイル・旧スキーマの残骸 | `~/.config/worktree-integrator.toml`（拡張子直付け）や `[servers.<repo>.<server>]` / トップレベル `[copy]` / hooks の `background` は旧版の名残。新パス・新スキーマへ移行する |
 
 より詳しい症状別の切り分けは [references/troubleshooting.md](references/troubleshooting.md)、
-環境全体の一次調査は **worktree-integrator-doctor** エージェントに任せられる。
+環境全体の一次調査は **worktree-integrator-doctor** エージェント、hooks の設計・追加・
+修正は **worktree-integrator-hooks** エージェントに任せられる。

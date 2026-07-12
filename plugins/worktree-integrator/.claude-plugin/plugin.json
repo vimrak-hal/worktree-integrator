@@ -1,7 +1,7 @@
 {
   "name": "worktree-integrator",
-  "version": "0.2.0",
-  "description": "worktree-integrator（複数リポジトリの Git worktree を一括作成・管理する CLI）の Claude Code プラグイン。初期セットアップ（設定ファイル・dev サーバー定義・MCP 登録・検証）を案内するスキルと、環境不調の一次調査を行う読み取り専用の診断エージェントを収録。",
+  "version": "0.3.0",
+  "description": "worktree-integrator（複数リポジトリの Git worktree を一括作成・管理する CLI）の Claude Code プラグイン。初期セットアップ（設定ファイル・dev サーバー定義・MCP 登録・検証）を案内するスキルと、環境不調の一次調査を行う読み取り専用の診断エージェント、ライフサイクルフック（[[hooks.*]]）の設計・記述・検証を行う hooks 設定エージェントを収録。",
   "author": {
     "name": "vimrak-hal"
   },
