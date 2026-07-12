@@ -8,11 +8,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"sync"
 	"time"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/core/wtenv"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/childio"
+	"github.com/vimrak-hal/worktree-integrator/internal/infra/parallel"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/proc"
 )
 
@@ -46,23 +46,19 @@ func RunWorktree(ctx context.Context, hooks []Hook, run *wtenv.RunContext, repos
 	return runJobs(ctx, jobs, run, cio)
 }
 
-// runJobs はすべての job を並列に実行し（サブプロセスの処理は I/O バウンドなので
-// job ごとに 1 つの goroutine を割り当てる）、結果を job の順に収集する。
+// runJobs はすべての job を有界の並列度で実行し、結果を job の順に収集する。
+// フックはリポジトリ数 × フック本数だけの子プロセスを起こしうるため、無制限に
+// 一斉起動せず parallel.AutoLimit()（job 数との min）を上限として抑える。これは
+// worktree 側の並列作成と一貫した有界化である。taggedWriter による出力の混線防止と
+// Outcome の順序は、この有界化の影響を受けない。
 func runJobs(ctx context.Context, jobs []job, run *wtenv.RunContext, cio childio.Streams) []Outcome {
 	if len(jobs) == 0 {
 		return nil
 	}
-	outcomes := make([]Outcome, len(jobs))
-	var wg sync.WaitGroup
-	for i := range jobs {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			outcomes[i] = execute(ctx, jobs[i].hook, run, jobs[i].repo, cio)
-		}(i)
-	}
-	wg.Wait()
-	return outcomes
+	limit := min(parallel.AutoLimit(), len(jobs))
+	return parallel.Map(ctx, limit, jobs, func(ctx context.Context, _ int, j job) Outcome {
+		return execute(ctx, j.hook, run, j.repo, cio)
+	})
 }
 
 // execute は単一のフックを完了まで実行し、その結果を返す。コマンドは WT_* 環境変数を

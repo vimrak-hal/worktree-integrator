@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/vimrak-hal/worktree-integrator/internal/infra/parallel"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/testutil"
 )
 
@@ -31,7 +32,7 @@ func TestConcurrencyRequestedCappedAtRepoCount(t *testing.T) {
 }
 
 func TestAutomaticConcurrencyTracksRepoCount(t *testing.T) {
-	cap := autoConcurrencyCap()
+	cap := parallel.AutoLimit()
 	if cap < 4 || cap > 16 {
 		t.Fatalf("cap out of band: %d", cap)
 	}
