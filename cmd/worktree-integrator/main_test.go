@@ -162,7 +162,7 @@ func TestRunConfigCheckInvalidFile(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit code = %d, want 1 (stdout: %q)", code, stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "is missing its `name`") {
+	if !strings.Contains(stderr.String(), "`name` がありません") {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
 }

@@ -84,7 +84,7 @@ func Scan(ctx context.Context, worktreesDir string) ([]Worktree, error) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read worktrees directory %s: %w", worktreesDir, err)
+		return nil, fmt.Errorf("ワークツリーディレクトリ %s を読み取れません: %w", worktreesDir, err)
 	}
 	var out []Worktree
 	for _, entry := range entries {
@@ -152,7 +152,7 @@ func membersAndSubdirs(ctx context.Context, root string) (members []RepoEntry, s
 		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("read worktree root %s: %w", root, err)
+		return nil, nil, fmt.Errorf("ワークツリールート %s を読み取れません: %w", root, err)
 	}
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {

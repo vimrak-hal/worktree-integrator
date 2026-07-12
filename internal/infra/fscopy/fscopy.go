@@ -195,14 +195,14 @@ func descend(root, rel string, create bool) (string, error) {
 		switch {
 		case err == nil:
 			if info.Mode()&fs.ModeSymlink != 0 {
-				return "", fmt.Errorf("refusing to traverse symlinked directory: %s", next)
+				return "", fmt.Errorf("シンボリックリンクのディレクトリは辿りません: %s", next)
 			}
 			if !info.IsDir() {
-				return "", fmt.Errorf("not a directory: %s", next)
+				return "", fmt.Errorf("ディレクトリではありません: %s", next)
 			}
 		case errors.Is(err, fs.ErrNotExist):
 			if !create {
-				return "", fmt.Errorf("missing intermediate directory: %w", fs.ErrNotExist)
+				return "", fmt.Errorf("中間ディレクトリがありません: %w", fs.ErrNotExist)
 			}
 			if err := os.Mkdir(next, 0o755); err != nil {
 				return "", err
@@ -243,11 +243,11 @@ func copyTree(ctx context.Context, src, dst, rel string, excludes []string) erro
 		dinfo, derr := os.Lstat(dst)
 		switch {
 		case derr == nil && dinfo.Mode()&fs.ModeSymlink != 0:
-			return fmt.Errorf("refusing to copy into symlinked path: %s", dst)
+			return fmt.Errorf("シンボリックリンクのパスへはコピーしません: %s", dst)
 		case derr == nil && dinfo.IsDir():
 			// 既存のディレクトリを再利用する
 		case derr == nil:
-			return fmt.Errorf("destination exists and is not a directory: %s", dst)
+			return fmt.Errorf("コピー先が既に存在し、ディレクトリではありません: %s", dst)
 		default:
 			if err := os.Mkdir(dst, 0o755); err != nil {
 				return err

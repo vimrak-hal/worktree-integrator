@@ -289,7 +289,7 @@ func watchStartup(ctx context.Context, pc ProcessControl, id proc.Ident, logPath
 	for {
 		if !pc.Alive(id) {
 			return &StartError{
-				Cause:   fmt.Errorf("server process (pid %d) exited immediately after start", id.Pid),
+				Cause:   fmt.Errorf("サーバープロセス（pid %d）が起動直後に終了しました", id.Pid),
 				LogTail: ReadTail(logPath, logTailLines),
 			}
 		}

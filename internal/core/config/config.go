@@ -133,22 +133,22 @@ func LoadFrom(path string) (*File, error) {
 		return &File{}, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read configuration file %s: %w", path, err)
+		return nil, fmt.Errorf("設定ファイル %s を読み込めません: %w", path, err)
 	}
 
 	var f File
 	md, err := toml.Decode(string(data), &f)
 	if err != nil {
-		return nil, fmt.Errorf("parse configuration file %s: %w", path, err)
+		return nil, fmt.Errorf("設定ファイル %s を解析できません: %w", path, err)
 	}
 	if undecoded := md.Undecoded(); len(undecoded) > 0 {
-		return nil, fmt.Errorf("parse configuration file %s: %s", path, undecodedMessage(undecoded))
+		return nil, fmt.Errorf("設定ファイル %s を解析できません: %s", path, undecodedMessage(undecoded))
 	}
 	if err := expandPaths(&f); err != nil {
-		return nil, fmt.Errorf("parse configuration file %s: %w", path, err)
+		return nil, fmt.Errorf("設定ファイル %s を解析できません: %w", path, err)
 	}
 	if err := validateAll(&f); err != nil {
-		return nil, fmt.Errorf("parse configuration file %s: %w", path, err)
+		return nil, fmt.Errorf("設定ファイル %s を解析できません: %w", path, err)
 	}
 	return &f, nil
 }
@@ -161,10 +161,10 @@ func LoadFrom(path string) (*File, error) {
 func undecodedMessage(keys []toml.Key) string {
 	for _, key := range keys {
 		if hint := migrationHint(key); hint != "" {
-			return fmt.Sprintf("unknown key %q%s", key.String(), hint)
+			return fmt.Sprintf("未知のキー %q%s", key.String(), hint)
 		}
 	}
-	return fmt.Sprintf("unknown key %q", keys[0].String())
+	return fmt.Sprintf("未知のキー %q です", keys[0].String())
 }
 
 // migrationHint は、旧スキーマ（v1）から対応が付く未知キーについて、スキーマ v2 への
@@ -223,7 +223,7 @@ func expandTilde(p string) (string, error) {
 // 呼び出し」の薄い層である。
 func validateAll(f *File) error {
 	if f.Concurrency < 0 {
-		return fmt.Errorf("`concurrency` must be zero (automatic) or positive, got %d", f.Concurrency)
+		return fmt.Errorf("`concurrency` は 0（自動）または正の整数である必要があります（%d が指定されました）", f.Concurrency)
 	}
 	if err := f.Hooks.Validate(); err != nil {
 		return err

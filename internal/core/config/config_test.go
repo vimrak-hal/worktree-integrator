@@ -79,7 +79,7 @@ func TestPartialFileLeavesOtherFieldsUnset(t *testing.T) {
 
 func TestUnknownKeysRejected(t *testing.T) {
 	_, err := LoadFrom(writeConfig(t, "nope = true\n"))
-	if err == nil || !strings.Contains(err.Error(), "parse configuration file") {
+	if err == nil || !strings.Contains(err.Error(), "解析できません") {
 		t.Fatalf("expected parse error, got %v", err)
 	}
 }
@@ -284,7 +284,7 @@ func TestValidateRejectsInvalidConfigs(t *testing.T) {
 [[hooks.before]]
 command = "echo hi"
 `,
-			want: "a before hook is missing its `name`",
+			want: "before フックに `name` がありません",
 		},
 		{
 			name: "after_worktree フックの name 欠落",
@@ -292,7 +292,7 @@ command = "echo hi"
 [[hooks.after_worktree]]
 command = "echo hi"
 `,
-			want: "a after_worktree hook is missing its `name`",
+			want: "after_worktree フックに `name` がありません",
 		},
 		{
 			name: "after フックの name 欠落",
@@ -300,7 +300,7 @@ command = "echo hi"
 [[hooks.after]]
 command = "echo hi"
 `,
-			want: "a after hook is missing its `name`",
+			want: "after フックに `name` がありません",
 		},
 		{
 			name: "before フックの command 欠落",
@@ -308,7 +308,7 @@ command = "echo hi"
 [[hooks.before]]
 name = "noop"
 `,
-			want: "hook \"noop\" is missing its `command`",
+			want: "フック \"noop\" に `command` がありません",
 		},
 		{
 			name: "サーバーの start 欠落",
@@ -316,7 +316,7 @@ name = "noop"
 [repos.app.servers.backend]
 dir = "backend"
 `,
-			want: "is missing its `start` command",
+			want: "`start` コマンドがありません",
 		},
 	}
 
@@ -329,7 +329,7 @@ dir = "backend"
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error = %q, want substring %q", err.Error(), tc.want)
 			}
-			if !strings.Contains(err.Error(), "parse configuration file") {
+			if !strings.Contains(err.Error(), "解析できません") {
 				t.Fatalf("error = %q, want wrapping with parse-configuration prefix", err.Error())
 			}
 		})
@@ -350,7 +350,7 @@ dir = "api"
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
-	if !strings.Contains(err.Error(), "server [repos.alpha.servers.api]") {
+	if !strings.Contains(err.Error(), "サーバー [repos.alpha.servers.api]") {
 		t.Fatalf("error = %q, want alpha reported first", err.Error())
 	}
 }
@@ -569,7 +569,7 @@ func TestLoadPropagatesValidationError(t *testing.T) {
 	}
 
 	_, err := Load()
-	if err == nil || !strings.Contains(err.Error(), "a before hook is missing its `name`") {
+	if err == nil || !strings.Contains(err.Error(), "before フックに `name` がありません") {
 		t.Fatalf("expected validation error, got %v", err)
 	}
 }

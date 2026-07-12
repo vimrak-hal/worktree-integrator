@@ -22,7 +22,7 @@ import (
 
 // ErrGone は、問い合わせた PID のプロセスが存在しないことを表す。呼び出し側は
 // errors.Is で「取得の失敗」と「プロセスの消滅」を区別できる。
-var ErrGone = errors.New("process not found")
+var ErrGone = errors.New("プロセスが見つかりません")
 
 // startTolerance は開始時刻照合の許容幅。OS のクロック粒度（linux の starttime は
 // USER_HZ=100 の 10ms 粒度、btime は秒粒度）と記録・観測間の丸め差を吸収する。

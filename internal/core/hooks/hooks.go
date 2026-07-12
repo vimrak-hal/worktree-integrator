@@ -44,10 +44,10 @@ func (c Config) Validate() error {
 	check := func(timing string, list []Hook) error {
 		for _, h := range list {
 			if h.Name == "" {
-				return fmt.Errorf("a %s hook is missing its `name`", timing)
+				return fmt.Errorf("%s フックに `name` がありません", timing)
 			}
 			if h.Command.IsEmpty() {
-				return fmt.Errorf("hook %q is missing its `command`", h.Name)
+				return fmt.Errorf("フック %q に `command` がありません", h.Name)
 			}
 		}
 		return nil

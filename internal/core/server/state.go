@@ -225,7 +225,7 @@ func (s *StateStore) migrateLegacy(ctx context.Context) error {
 	}
 	bak := s.inner.Path() + ".bak"
 	if err := os.Rename(s.inner.Path(), bak); err != nil {
-		return fmt.Errorf("move legacy state file aside: %w", err)
+		return fmt.Errorf("旧形式の状態ファイルを退避できません: %w", err)
 	}
 	if s.OnLegacy != nil {
 		s.OnLegacy(bak)
@@ -243,7 +243,7 @@ func (s *StateStore) isLegacyFile() (bool, error) {
 		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("read state file %s: %w", s.inner.Path(), err)
+		return false, fmt.Errorf("状態ファイル %s を読み取れません: %w", s.inner.Path(), err)
 	}
 	var probe legacyProbe
 	if _, err := toml.Decode(string(data), &probe); err != nil {

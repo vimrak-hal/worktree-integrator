@@ -60,7 +60,7 @@ func (s Config) Validate() error {
 		servers := s[repo]
 		for _, name := range servers.SortedServerNames() {
 			if err := servers[name].Validate(); err != nil {
-				return fmt.Errorf("server [repos.%s.servers.%s] %w", repo, name, err)
+				return fmt.Errorf("サーバー [repos.%s.servers.%s] %w", repo, name, err)
 			}
 		}
 	}
@@ -104,7 +104,7 @@ type Spec struct {
 // コマンドは必須である。
 func (spec Spec) Validate() error {
 	if spec.Start.IsEmpty() {
-		return errors.New("is missing its `start` command")
+		return errors.New("`start` コマンドがありません")
 	}
 	return nil
 }

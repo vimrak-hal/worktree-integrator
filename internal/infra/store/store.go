@@ -44,7 +44,7 @@ const lockRetryInterval = 25 * time.Millisecond
 var ErrBusy = errors.New("別の worktree-integrator コマンドが実行中です")
 
 // ErrReadOnly は、読み取り専用（Shared）セッションで Save が呼ばれたことを表す。
-var ErrReadOnly = errors.New("read-only (shared) session cannot save")
+var ErrReadOnly = errors.New("読み取り専用（共有）セッションでは保存できません")
 
 // Versioned は、自身のオンディスクフォーマットバージョンを報告できるドキュメント。
 // これを実装するドキュメントは Load 時に検証され、ストアに宣言されたバージョン
@@ -89,7 +89,7 @@ func (f *File[T]) tmpPath() string  { return f.path + ".tmp" }
 func (f *File[T]) ensureDir() error {
 	dir := filepath.Dir(f.path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create state directory %s: %w", dir, err)
+		return fmt.Errorf("状態ディレクトリ %s を作成できません: %w", dir, err)
 	}
 	return nil
 }
@@ -157,7 +157,7 @@ func (f *File[T]) acquire(ctx context.Context, how int) (*os.File, error) {
 func AcquireLock(ctx context.Context, path string, how int, timeout time.Duration) (*os.File, error) {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
-		return nil, fmt.Errorf("open lock file %s: %w", path, err)
+		return nil, fmt.Errorf("ロックファイル %s を開けません: %w", path, err)
 	}
 	deadline := time.Now().Add(timeout)
 	for {
@@ -167,7 +167,7 @@ func AcquireLock(ctx context.Context, path string, how int, timeout time.Duratio
 		}
 		if !errors.Is(err, syscall.EWOULDBLOCK) {
 			_ = file.Close()
-			return nil, fmt.Errorf("acquire lock on %s: %w", path, err)
+			return nil, fmt.Errorf("%s のロックを取得できません: %w", path, err)
 		}
 		if time.Now().After(deadline) {
 			_ = file.Close()
@@ -193,20 +193,20 @@ func (s *Session[T]) Load() (*T, error) {
 		return doc, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read %s file %s: %w", f.noun, f.path, err)
+		return nil, fmt.Errorf("%s ファイル %s を読み取れません: %w", f.noun, f.path, err)
 	}
 	// （設定ローダーと同様に）未知のキーを拒否する。認識されないキーは、
 	// そうしないと次回の保存時に黙って失われてしまう。
 	md, err := toml.Decode(string(data), doc)
 	if err != nil {
-		return nil, fmt.Errorf("parse %s file %s: %w", f.noun, f.path, err)
+		return nil, fmt.Errorf("%s ファイル %s を解析できません: %w", f.noun, f.path, err)
 	}
 	if undecoded := md.Undecoded(); len(undecoded) > 0 {
-		return nil, fmt.Errorf("parse %s file %s: unknown key %q", f.noun, f.path, undecoded[0].String())
+		return nil, fmt.Errorf("%s ファイル %s を解析できません: 未知のキー %q です", f.noun, f.path, undecoded[0].String())
 	}
 	if v, ok := any(doc).(Versioned); ok && v.DocVersion() > f.version {
 		return nil, fmt.Errorf(
-			"%s file %s has version %d, newer than this build supports (%d); update worktree-integrator",
+			"%s ファイル %s はバージョン %d で、このビルドが対応する上限（%d）より新しいものです。worktree-integrator を更新してください",
 			f.noun, f.path, v.DocVersion(), f.version)
 	}
 	return doc, nil
@@ -217,18 +217,18 @@ func (s *Session[T]) Load() (*T, error) {
 func (s *Session[T]) Save(doc *T) error {
 	f := s.file
 	if s.readOnly {
-		return fmt.Errorf("save %s file %s: %w", f.noun, f.path, ErrReadOnly)
+		return fmt.Errorf("%s ファイル %s を保存できません: %w", f.noun, f.path, ErrReadOnly)
 	}
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(doc); err != nil {
-		return fmt.Errorf("serialize %s: %w", f.noun, err)
+		return fmt.Errorf("%s をシリアライズできません: %w", f.noun, err)
 	}
 	tmp := f.tmpPath()
 	if err := os.WriteFile(tmp, buf.Bytes(), 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", tmp, err)
+		return fmt.Errorf("%s を書き込めません: %w", tmp, err)
 	}
 	if err := os.Rename(tmp, f.path); err != nil {
-		return fmt.Errorf("replace %s: %w", f.path, err)
+		return fmt.Errorf("%s を置き換えられません: %w", f.path, err)
 	}
 	return nil
 }

@@ -61,13 +61,13 @@ func (c *CopySpec) UnmarshalTOML(v any) error {
 			switch k {
 			case "paths", "gitignored", "exclude", "exclude_defaults":
 			default:
-				return fmt.Errorf("unknown key %q in copy entry", k)
+				return fmt.Errorf("copy エントリに未知のキー %q があります", k)
 			}
 		}
 		if raw, ok := t["paths"]; ok {
 			arr, ok := raw.([]any)
 			if !ok {
-				return fmt.Errorf("copy `paths` must be an array of strings, got %T", raw)
+				return fmt.Errorf("copy の `paths` は文字列の配列である必要があります（%T が指定されました）", raw)
 			}
 			paths, err := stringSlice("copy paths", arr)
 			if err != nil {
@@ -78,14 +78,14 @@ func (c *CopySpec) UnmarshalTOML(v any) error {
 		if raw, ok := t["gitignored"]; ok {
 			b, ok := raw.(bool)
 			if !ok {
-				return fmt.Errorf("copy `gitignored` must be a boolean, got %T", raw)
+				return fmt.Errorf("copy の `gitignored` は真偽値である必要があります（%T が指定されました）", raw)
 			}
 			c.Gitignored = b
 		}
 		if raw, ok := t["exclude"]; ok {
 			arr, ok := raw.([]any)
 			if !ok {
-				return fmt.Errorf("copy `exclude` must be an array of strings, got %T", raw)
+				return fmt.Errorf("copy の `exclude` は文字列の配列である必要があります（%T が指定されました）", raw)
 			}
 			ex, err := stringSlice("copy exclude", arr)
 			if err != nil {
@@ -96,12 +96,12 @@ func (c *CopySpec) UnmarshalTOML(v any) error {
 		if raw, ok := t["exclude_defaults"]; ok {
 			b, ok := raw.(bool)
 			if !ok {
-				return fmt.Errorf("copy `exclude_defaults` must be a boolean, got %T", raw)
+				return fmt.Errorf("copy の `exclude_defaults` は真偽値である必要があります（%T が指定されました）", raw)
 			}
 			c.ExcludeDefaults = &b
 		}
 	default:
-		return fmt.Errorf("copy entry must be an array or a table, got %T", v)
+		return fmt.Errorf("copy エントリは配列またはテーブルである必要があります（%T が指定されました）", v)
 	}
 	return nil
 }
@@ -111,7 +111,7 @@ func stringSlice(what string, arr []any) ([]string, error) {
 	for _, e := range arr {
 		s, ok := e.(string)
 		if !ok {
-			return nil, fmt.Errorf("%s must be strings, got %T", what, e)
+			return nil, fmt.Errorf("%s は文字列である必要があります（%T が指定されました）", what, e)
 		}
 		out = append(out, s)
 	}

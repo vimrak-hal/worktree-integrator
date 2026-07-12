@@ -386,7 +386,7 @@ func TestSourceIntermediateNotADirectory(t *testing.T) {
 	if len(report.Copied) != 0 || len(report.Failures) != 1 {
 		t.Fatalf("report = %+v", report)
 	}
-	if !strings.Contains(report.Failures[0].Err.Error(), "not a directory") {
+	if !strings.Contains(report.Failures[0].Err.Error(), "ディレクトリではありません") {
 		t.Fatalf("err = %q", report.Failures[0].Err)
 	}
 }
@@ -404,7 +404,7 @@ func TestDestIntermediateNotADirectory(t *testing.T) {
 	if len(report.Copied) != 0 || len(report.Failures) != 1 {
 		t.Fatalf("report = %+v", report)
 	}
-	if !strings.Contains(report.Failures[0].Err.Error(), "not a directory") {
+	if !strings.Contains(report.Failures[0].Err.Error(), "ディレクトリではありません") {
 		t.Fatalf("err = %q", report.Failures[0].Err)
 	}
 }
@@ -494,7 +494,7 @@ func TestRefusesToCopyDirIntoSymlinkedDst(t *testing.T) {
 	if len(report.Copied) != 0 || len(report.Failures) != 1 {
 		t.Fatalf("report = %+v", report)
 	}
-	if !strings.Contains(report.Failures[0].Err.Error(), "refusing to copy into symlinked path") {
+	if !strings.Contains(report.Failures[0].Err.Error(), "シンボリックリンクのパスへはコピーしません") {
 		t.Fatalf("err = %q", report.Failures[0].Err)
 	}
 	if _, err := os.Stat(filepath.Join(outside, "f")); err == nil {
@@ -515,7 +515,7 @@ func TestDirSourceOverExistingFileDestination(t *testing.T) {
 	if len(report.Copied) != 0 || len(report.Failures) != 1 {
 		t.Fatalf("report = %+v", report)
 	}
-	if !strings.Contains(report.Failures[0].Err.Error(), "destination exists and is not a directory") {
+	if !strings.Contains(report.Failures[0].Err.Error(), "コピー先が既に存在し、ディレクトリではありません") {
 		t.Fatalf("err = %q", report.Failures[0].Err)
 	}
 }

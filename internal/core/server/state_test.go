@@ -306,7 +306,7 @@ func TestNewerVersionStateIsRejected(t *testing.T) {
 	}
 
 	err := store.View(t.Context(), func(*server.State) error { return nil })
-	if err == nil || !strings.Contains(err.Error(), "newer than this build") {
+	if err == nil || !strings.Contains(err.Error(), "より新しい") {
 		t.Fatalf("View of a newer-version file = %v, want version rejection", err)
 	}
 	if _, statErr := os.Stat(store.StateFile()); statErr != nil {

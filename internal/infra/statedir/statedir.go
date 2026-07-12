@@ -48,7 +48,7 @@ func Default() (Root, error) {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return Root{}, fmt.Errorf("could not determine the home directory: %w", err)
+		return Root{}, fmt.Errorf("ホームディレクトリを特定できません: %w", err)
 	}
 	return At(filepath.Join(home, ".local", "state", "worktree-integrator")), nil
 }
@@ -84,7 +84,7 @@ func (r Root) WithRepoLock(ctx context.Context, repo string, fn func() error) er
 	}
 	path := r.RepoLockPath(repo)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create lock directory %s: %w", filepath.Dir(path), err)
+		return fmt.Errorf("ロックディレクトリ %s を作成できません: %w", filepath.Dir(path), err)
 	}
 	// ロック取得の再試行意味論（LOCK_NB + 小刻みな再試行 → ctx キャンセル →
 	// タイムアウトで ErrBusy）は状態ファイルロックと同一であり、infra/store の共通

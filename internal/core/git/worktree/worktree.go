@@ -193,13 +193,13 @@ func Process(ctx context.Context, req Request, reporter Reporter) Outcome {
 		// プレースホルダを削除する。削除失敗は握り潰さず表面化させる。
 		if err := os.Remove(req.Target); err != nil {
 			return fail(StageDestination,
-				fmt.Errorf("remove empty directory %s: %w", req.Target, err))
+				fmt.Errorf("空のディレクトリ %s を削除できません: %w", req.Target, err))
 		}
 	case destWorktree:
 		return Outcome{Repo: req.RepoName, Status: StatusSkipped, Stage: StageDestination}
 	case destOccupied:
 		return fail(StageDestination,
-			fmt.Errorf("%s already exists and is not a worktree", req.Target))
+			fmt.Errorf("%s は既に存在し、ワークツリーではありません", req.Target))
 	}
 
 	// 同名のローカルブランチが既に存在する場合、暗黙に再利用するのではなく
@@ -211,7 +211,7 @@ func Process(ctx context.Context, req Request, reporter Reporter) Outcome {
 	}
 	if exists {
 		return fail(StageBranchCheck,
-			fmt.Errorf("local branch %q already exists; delete it or choose another name", req.WorktreeName))
+			fmt.Errorf("ローカルブランチ %q は既に存在します。削除するか別の名前を選んでください", req.WorktreeName))
 	}
 
 	// ベースブランチ名の解決: 明示（req.Base）が無ければリモートのデフォルトブランチを
@@ -279,14 +279,14 @@ func classifyDestination(path string) (destination, error) {
 		return destVacant, nil // 存在しない — 通常どおり作成する
 	}
 	if err != nil {
-		return 0, fmt.Errorf("inspect destination %s: %w", path, err)
+		return 0, fmt.Errorf("作成先 %s を検査できません: %w", path, err)
 	}
 	if !info.IsDir() {
 		return destOccupied, nil // ワークツリーのディレクトリがあるべき場所にファイルがある
 	}
 	entries, err := os.ReadDir(path)
 	if err != nil {
-		return 0, fmt.Errorf("read destination %s: %w", path, err)
+		return 0, fmt.Errorf("作成先 %s を読み取れません: %w", path, err)
 	}
 	if len(entries) == 0 {
 		return destEmptyDir, nil

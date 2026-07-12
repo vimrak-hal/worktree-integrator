@@ -29,7 +29,7 @@ func TestCheck(t *testing.T) {
 		if res.Status != CheckInvalid || res.Err == nil {
 			t.Fatalf("res = %+v", res)
 		}
-		if !strings.Contains(res.Err.Error(), "is missing its `name`") {
+		if !strings.Contains(res.Err.Error(), "`name` がありません") {
 			t.Fatalf("err = %v", res.Err)
 		}
 	})

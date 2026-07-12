@@ -26,7 +26,7 @@ func StartTime(pid int) (time.Time, error) {
 		if errors.Is(err, fs.ErrNotExist) {
 			return time.Time{}, fmt.Errorf("pid %d: %w", pid, ErrGone)
 		}
-		return time.Time{}, fmt.Errorf("read /proc/%d/stat: %w", pid, err)
+		return time.Time{}, fmt.Errorf("/proc/%d/stat を読み取れません: %w", pid, err)
 	}
 	// 2 番目のフィールド comm は空白や括弧を含み得るため、位置での分割は最後の ')'
 	// より後ろに対して行う。starttime はマニュアル上 22 番目 = ')' 以降の 20 番目。
@@ -36,11 +36,11 @@ func StartTime(pid int) (time.Time, error) {
 	}
 	fields := strings.Fields(rest)
 	if len(fields) < 20 {
-		return time.Time{}, fmt.Errorf("parse /proc/%d/stat: unexpected format", pid)
+		return time.Time{}, fmt.Errorf("/proc/%d/stat を解析できません: 予期しない形式です", pid)
 	}
 	ticks, err := strconv.ParseUint(fields[19], 10, 64)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("parse /proc/%d/stat starttime %q: %w", pid, fields[19], err)
+		return time.Time{}, fmt.Errorf("/proc/%d/stat の starttime %q を解析できません: %w", pid, fields[19], err)
 	}
 	boot, err := bootTime()
 	if err != nil {
@@ -53,16 +53,16 @@ func StartTime(pid int) (time.Time, error) {
 func bootTime() (time.Time, error) {
 	data, err := os.ReadFile("/proc/stat")
 	if err != nil {
-		return time.Time{}, fmt.Errorf("read /proc/stat: %w", err)
+		return time.Time{}, fmt.Errorf("/proc/stat を読み取れません: %w", err)
 	}
 	for line := range strings.Lines(string(data)) {
 		if rest, ok := strings.CutPrefix(line, "btime "); ok {
 			secs, err := strconv.ParseInt(strings.TrimSpace(rest), 10, 64)
 			if err != nil {
-				return time.Time{}, fmt.Errorf("parse /proc/stat btime %q: %w", rest, err)
+				return time.Time{}, fmt.Errorf("/proc/stat の btime %q を解析できません: %w", rest, err)
 			}
 			return time.Unix(secs, 0), nil
 		}
 	}
-	return time.Time{}, errors.New("btime not found in /proc/stat")
+	return time.Time{}, errors.New("/proc/stat に btime が見つかりません")
 }

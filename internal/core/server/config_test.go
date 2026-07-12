@@ -90,7 +90,7 @@ func TestConfigValidateReportsFirstMissingStart(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
-	if got := err.Error(); got != "server [repos.alpha.servers.api] is missing its `start` command" {
+	if got := err.Error(); got != "サーバー [repos.alpha.servers.api] `start` コマンドがありません" {
 		t.Fatalf("err = %q", got)
 	}
 }

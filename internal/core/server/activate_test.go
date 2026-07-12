@@ -255,7 +255,7 @@ func TestStartErrorErrorAndUnwrap(t *testing.T) {
 // TestStopFailedErrorErrorAndUnwrap は、StopFailedError の Error() と Unwrap() を確認する。
 func TestStopFailedErrorErrorAndUnwrap(t *testing.T) {
 	e := &server.StopFailedError{Cause: server.ErrStillRunning}
-	if got := e.Error(); got != "stop previous instance: process group still alive after SIGKILL" {
+	if got := e.Error(); got != "stop previous instance: SIGKILL 後もプロセスグループが生存しています" {
 		t.Fatalf("Error() = %q", got)
 	}
 	if !errors.Is(e, server.ErrStillRunning) {

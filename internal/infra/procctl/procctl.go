@@ -33,7 +33,7 @@ const pollInterval = 50 * time.Millisecond
 // 表す。StopGroup は消滅を確認できた場合のみ nil を返す。この失敗を受け取った
 // 状態機械は Running の記録を保持する（孤児を台帳から消さない。次回コマンドで
 // 再試行できる）。
-var ErrStillRunning = errors.New("process group still alive after SIGKILL")
+var ErrStillRunning = errors.New("SIGKILL 後もプロセスグループが生存しています")
 
 // UnixProcess は実際の ProcessControl。長時間稼働するサーバーを自身のセッションに
 // デタッチして起動し（そのため CLI の終了やターミナルのクローズ後も生き残る）、停止時には
@@ -71,11 +71,11 @@ func (u *UnixProcess) RunForeground(ctx context.Context, script, cwd string, env
 	kind, _ := proc.Classify(ctx, ctx, err)
 	switch kind {
 	case proc.ResultCanceled, proc.ResultTimedOut:
-		return false, fmt.Errorf("run command `%s`: %w", script, ctx.Err())
+		return false, fmt.Errorf("コマンド `%s` を実行できません: %w", script, ctx.Err())
 	case proc.ResultExitNonZero:
 		return false, nil // 実行はされたが、0 以外で終了した
 	default: // ResultStartFailed
-		return false, fmt.Errorf("run command `%s`: %w", script, err)
+		return false, fmt.Errorf("コマンド `%s` を実行できません: %w", script, err)
 	}
 }
 
@@ -87,18 +87,18 @@ func (u *UnixProcess) RunForeground(ctx context.Context, script, cwd string, env
 // env は既に合成済みの環境（"KEY=VALUE" のスライス）であり、そのまま子プロセスへ渡す。
 func (u *UnixProcess) SpawnDetached(script, cwd string, env []string, logPath string) (proc.Ident, error) {
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
-		return proc.Ident{}, fmt.Errorf("create log directory %s: %w", filepath.Dir(logPath), err)
+		return proc.Ident{}, fmt.Errorf("ログディレクトリ %s を作成できません: %w", filepath.Dir(logPath), err)
 	}
 	// 既存ログを 1 世代だけ保持する。これから書くログが現行インスタンスの出力だけに
 	// なるため、即死検出（LogTail）が前のインスタンスの出力を混ぜて報告しない。
 	if _, err := os.Stat(logPath); err == nil {
 		if err := os.Rename(logPath, logPath+".prev"); err != nil {
-			return proc.Ident{}, fmt.Errorf("rotate log file %s: %w", logPath, err)
+			return proc.Ident{}, fmt.Errorf("ログファイル %s をローテートできません: %w", logPath, err)
 		}
 	}
 	out, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		return proc.Ident{}, fmt.Errorf("open log file %s: %w", logPath, err)
+		return proc.Ident{}, fmt.Errorf("ログファイル %s を開けません: %w", logPath, err)
 	}
 	defer func() { _ = out.Close() }()
 
@@ -114,7 +114,7 @@ func (u *UnixProcess) SpawnDetached(script, cwd string, env []string, logPath st
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
 	if err := cmd.Start(); err != nil {
-		return proc.Ident{}, fmt.Errorf("spawn server `%s`: %w", script, err)
+		return proc.Ident{}, fmt.Errorf("サーバー `%s` を起動できません: %w", script, err)
 	}
 	pid := cmd.Process.Pid
 	// 最終的に終了したとき（停止によるかクラッシュによるかを問わず）に非同期で回収し、
