@@ -10,21 +10,22 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# This workflow only builds, vets and tests; it needs no write access.
+# This workflow only builds, vets, lints and tests; it needs no write access.
 permissions:
   contents: read
 
 jobs:
   check:
-    name: fmt, vet, build & test
+    name: fmt, vet, lint, build & test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install Go
         uses: actions/setup-go@v5
         with:
-          go-version: stable
-          check-latest: true
+          # Pin the toolchain to the version declared in go.mod so CI never
+          # drifts from what the module (and go vet's analysis) expects.
+          go-version-file: go.mod
       - name: Check formatting
         run: |
           unformatted="$(gofmt -l .)"
@@ -35,9 +36,21 @@ jobs:
           fi
       - name: Vet
         run: go vet ./...
+      - name: Lint
+        # golangci-lint v2 (.golangci.yml). The vet/staticcheck overlap with the
+        # standalone steps is intentional; keeping them independent surfaces
+        # failures even if the linter set changes.
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
       - name: Build
         run: go build ./...
       - name: Test (race detector)
         # The tests build local file:// git repositories, so a `git` on PATH is
         # the only runtime dependency (ubuntu-latest ships one).
         run: go test -race ./...
+      - name: Vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - name: Dependencies are tidy
+        # Fail if go.mod / go.sum are not what `go mod tidy` would produce.
+        run: go mod tidy -diff

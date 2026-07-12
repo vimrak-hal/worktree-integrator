@@ -1,0 +1,27 @@
+# golangci-lint v2 系の設定。
+# プロジェクト方針として過剰な linter は入れず、実利のある最小構成に絞る。
+version: "2"
+
+linters:
+  # 既定セットは使わず、明示的に有効化した linter のみを走らせる。
+  default: none
+  enable:
+    - errcheck    # 戻り値の error を握り潰していないか
+    - govet       # go vet 相当の疑わしい構文
+    - ineffassign # 使われない代入
+    - staticcheck # 静的解析（旧 gosimple/stylecheck を包含）
+    - unused      # 未使用の定数・変数・関数・型
+  settings:
+    errcheck:
+      # CLI 描画層は結果を呼び出し側の io.Writer（stdout/stderr・取り込みバッファ）へ
+      # 書くだけで、書き込みエラーを扱う手立ても意味も無い（標準出力への出力を諦める
+      # 以外にできることがない）。この一群は意図的に握り潰すため errcheck の対象外にする。
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+
+formatters:
+  # 整形は gofmt に一本化する。
+  enable:
+    - gofmt
