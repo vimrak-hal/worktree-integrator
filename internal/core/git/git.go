@@ -22,6 +22,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/vimrak-hal/worktree-integrator/internal/infra/proc"
 )
 
 // waitDelay は、git 本体の終了（またはキャンセルによる kill）後も子孫プロセスが
@@ -41,57 +43,91 @@ func IsWorkTree(dir string) bool {
 	return err == nil
 }
 
+// execGit は `git -C dir <args...>` を実行し、トリムした標準出力・標準エラー出力と、
+// 実行結果を表すエラーを返す。git 実行の定型（GIT_TERMINAL_PROMPT=0・WaitDelay・
+// 「キャンセルで殺された git も *exec.ExitError を返すため ctx.Err() を先に見る」判定）を
+// ここ 1 箇所に集約し、run / succeeds / runOptional / PruneWorktreesDryRun は
+// この戻り値を解釈する薄いアダプタになる。
+//
+// 返り値のエラー:
+//   - 正常終了（exit 0）: nil
+//   - ctx のキャンセル: ctx.Err() を包んだエラー（errors.Is(err, context.Canceled) で判別可）
+//   - 0 以外の終了・起動失敗: gitError。元エラーを保持するため、呼び出し側は
+//     errors.As で *exec.ExitError を取り出して「クリーンな 0 以外終了」を判別できる。
+//
+// stdout / stderr はエラー時には空文字列を返す（呼び出し側はいずれの出力も成功時のみ
+// 参照する）。
+func execGit(ctx context.Context, dir string, args ...string) (stdout, stderr string, err error) {
+	full := append([]string{"-C", dir}, args...)
+	cmd := exec.CommandContext(ctx, "git", full...)
+	cmd.WaitDelay = waitDelay
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	runErr := cmd.Run()
+	if runErr == nil {
+		return strings.TrimRight(outBuf.String(), "\n"), strings.TrimRight(errBuf.String(), "\n"), nil
+	}
+	// キャンセルで殺された git も "signal: killed" を報告するため、ctx 起因の失敗を
+	// 型として先に切り分ける（proc.Classify に一本化した判定）。ここは per-job の期限を
+	// 持たないので parent と child に同じ ctx を渡す。
+	if kind, _ := proc.Classify(ctx, ctx, runErr); kind == proc.ResultCanceled || kind == proc.ResultTimedOut {
+		return "", "", fmt.Errorf("git %s: %w", strings.Join(args, " "), ctx.Err())
+	}
+	return "", "", gitError(args, errBuf.String(), runErr)
+}
+
 // run は `git -C dir <args...>` を実行し、トリムした標準出力を返す。失敗時は
 // エラーに git の標準エラー出力を含める。ctx のキャンセルで git プロセスは
 // 終了させられ、そのエラーは errors.Is(err, context.Canceled) で判別できるよう
 // ctx.Err() をラップして返す。
 func run(ctx context.Context, dir string, args ...string) (string, error) {
-	full := append([]string{"-C", dir}, args...)
-	cmd := exec.CommandContext(ctx, "git", full...)
-	cmd.WaitDelay = waitDelay
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		// キャンセルで殺されたプロセスは "signal: killed" を報告する。呼び出し側が
-		// キャンセルを型で判別できるよう、ctx 起因の失敗は ctx.Err() を優先する。
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), ctxErr)
-		}
-		return "", gitError(args, stderr.String(), err)
-	}
-	return strings.TrimRight(stdout.String(), "\n"), nil
+	stdout, _, err := execGit(ctx, dir, args...)
+	return stdout, err
 }
 
 // succeeds は `git -C dir <args...>` を実行し、終了コードが 0 だったかを返す。
 // 非ゼロ終了は ok=false として報告され（エラーではない）、git をそもそも実行できなかった
 // 場合とキャンセルされた場合のみエラーとなる。
 func succeeds(ctx context.Context, dir string, args ...string) (bool, error) {
-	full := append([]string{"-C", dir}, args...)
-	cmd := exec.CommandContext(ctx, "git", full...)
-	cmd.WaitDelay = waitDelay
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	if err := cmd.Run(); err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return false, fmt.Errorf("git %s: %w", strings.Join(args, " "), ctxErr)
-		}
-		var exit *exec.ExitError
-		if errors.As(err, &exit) {
-			return false, nil
-		}
-		return false, gitError(args, "", err)
+	_, _, err := execGit(ctx, dir, args...)
+	if err == nil {
+		return true, nil
 	}
-	return true, nil
+	// クリーンな 0 以外終了（gitError が保持する *exec.ExitError）は ok=false であり
+	// エラーではない。それ以外（キャンセル・起動失敗）はエラーとして返す。
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return false, nil
+	}
+	return false, err
 }
 
+// gitError は git コマンドの失敗を表すエラーを構築する。文言は従来どおり
+// 「git <args>: <stderr>」（stderr が空なら元エラーの文言）だが、元エラーを Unwrap で
+// 保持するため、上流は errors.As で *exec.ExitError を取り出して 0 以外終了を型で
+// 判別できる。
 func gitError(args []string, stderr string, err error) error {
-	stderr = strings.TrimSpace(stderr)
-	if stderr != "" {
-		return fmt.Errorf("git %s: %s", strings.Join(args, " "), stderr)
-	}
-	return fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	return &gitCmdError{args: args, stderr: strings.TrimSpace(stderr), err: err}
 }
+
+// gitCmdError は失敗した git コマンドのエラー。文言を stderr 主体に保ちつつ、元エラーを
+// Unwrap 経由で保持する（%s で捨てると errors.As できなくなるのを避ける）。
+type gitCmdError struct {
+	args   []string
+	stderr string
+	err    error
+}
+
+func (e *gitCmdError) Error() string {
+	if e.stderr != "" {
+		return fmt.Sprintf("git %s: %s", strings.Join(e.args, " "), e.stderr)
+	}
+	return fmt.Sprintf("git %s: %v", strings.Join(e.args, " "), e.err)
+}
+
+func (e *gitCmdError) Unwrap() error { return e.err }
 
 // FetchRef は dir のリポジトリで、remote から branch 1 本だけを、タグをスキップして
 // フェッチする。クローン時の既定の refspec（`+refs/heads/*:refs/remotes/<remote>/*`）が
@@ -117,23 +153,16 @@ func FetchRef(ctx context.Context, dir, remote, branch string) error {
 // err が非 nil になるのは、コマンド自体を実行できなかった場合とキャンセルされた
 // 場合のみである。
 func runOptional(ctx context.Context, dir string, args ...string) (string, bool, error) {
-	full := append([]string{"-C", dir}, args...)
-	cmd := exec.CommandContext(ctx, "git", full...)
-	cmd.WaitDelay = waitDelay
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	if err := cmd.Run(); err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return "", false, fmt.Errorf("git %s: %w", strings.Join(args, " "), ctxErr)
-		}
-		var exit *exec.ExitError
-		if errors.As(err, &exit) {
-			return "", false, nil
-		}
-		return "", false, gitError(args, "", err)
+	stdout, _, err := execGit(ctx, dir, args...)
+	if err == nil {
+		return stdout, true, nil
 	}
-	return strings.TrimRight(stdout.String(), "\n"), true, nil
+	// クリーンな 0 以外終了（「見つからなかった」）は ok=false・err=nil として区別する。
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return "", false, nil
+	}
+	return "", false, err
 }
 
 // DefaultBranch は remote のデフォルトブランチ名を解決する。解決順序は

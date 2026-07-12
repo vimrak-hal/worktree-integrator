@@ -1,13 +1,8 @@
 package git
 
 import (
-	"bytes"
 	"context"
-	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 )
 
 // PruneWorktrees は作業ツリーが失われた古い連結ワークツリーのメタデータ
@@ -24,22 +19,13 @@ func PruneWorktrees(ctx context.Context, dir string) error {
 // メタデータが無い」を意味する。doctor が --fix なしで発見を報告するために使う。
 //
 // git はこの dry-run 報告を（stdout ではなく）stderr に書くため、共通の run では
-// なく stderr を戻り値として取り込む専用の実行を行う。
+// なく execGit の戻り値のうち stderr を取り込む。
 func PruneWorktreesDryRun(ctx context.Context, dir string) (string, error) {
-	args := []string{"worktree", "prune", "--dry-run", "--verbose"}
-	full := append([]string{"-C", dir}, args...)
-	cmd := exec.CommandContext(ctx, "git", full...)
-	cmd.WaitDelay = waitDelay
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), ctxErr)
-		}
-		return "", gitError(args, stderr.String(), err)
+	_, stderr, err := execGit(ctx, dir, "worktree", "prune", "--dry-run", "--verbose")
+	if err != nil {
+		return "", err
 	}
-	return strings.TrimRight(stderr.String(), "\n"), nil
+	return stderr, nil
 }
 
 // RemoveWorktree は dir のリポジトリから target の連結ワークツリーを削除する
