@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/create"
-	"github.com/vimrak-hal/worktree-integrator/internal/core/action"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/hooks"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/wtenv"
 )

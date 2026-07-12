@@ -33,7 +33,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/vimrak-hal/worktree-integrator/internal/core/action"
+	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/git"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/git/repo"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/git/worktree"

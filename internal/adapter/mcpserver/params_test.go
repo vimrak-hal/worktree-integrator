@@ -3,7 +3,7 @@ package mcpserver
 import (
 	"testing"
 
-	"github.com/vimrak-hal/worktree-integrator/internal/core/action"
+	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
 )
 
 // TestScopeFromPtr は、パラメータ省略（nil）のみが「全 worktree」(AllWorktrees) に

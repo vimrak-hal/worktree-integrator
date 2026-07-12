@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/vimrak-hal/worktree-integrator/internal/core/action"
+	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
 	corealias "github.com/vimrak-hal/worktree-integrator/internal/core/alias"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/cmdspec"
 	coreserver "github.com/vimrak-hal/worktree-integrator/internal/core/server"

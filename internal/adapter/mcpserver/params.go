@@ -1,7 +1,7 @@
 package mcpserver
 
 import (
-	"github.com/vimrak-hal/worktree-integrator/internal/core/action"
+	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
 )
 
 // ----- パラメータスキーマ -----

@@ -15,8 +15,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
+	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
 	"github.com/vimrak-hal/worktree-integrator/internal/buildinfo"
-	"github.com/vimrak-hal/worktree-integrator/internal/core/action"
 )
 
 // Invocation はコマンドラインが表す起動要求である。封印された sum-type であり、

@@ -12,9 +12,9 @@ import (
 
 	"github.com/vimrak-hal/worktree-integrator/internal/adapter/render"
 	"github.com/vimrak-hal/worktree-integrator/internal/app"
+	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/server"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/tree"
-	"github.com/vimrak-hal/worktree-integrator/internal/core/action"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/config"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/git/worktree"
 	coreserver "github.com/vimrak-hal/worktree-integrator/internal/core/server"

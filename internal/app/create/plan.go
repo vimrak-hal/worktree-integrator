@@ -3,7 +3,7 @@ package create
 import (
 	"path/filepath"
 
-	"github.com/vimrak-hal/worktree-integrator/internal/core/action"
+	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/git/repo"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/git/worktree"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/wtenv"

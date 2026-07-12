@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/server"
-	"github.com/vimrak-hal/worktree-integrator/internal/core/action"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/git"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/inventory"
 	coreserver "github.com/vimrak-hal/worktree-integrator/internal/core/server"

@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/vimrak-hal/worktree-integrator/internal/core/action"
+	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
 )
 
 // Parse は I/O を行わない純関数のため、旧テストの isolate（HOME / WT_* の差し替え

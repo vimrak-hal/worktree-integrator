@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vimrak-hal/worktree-integrator/internal/core/action"
+	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/cmdspec"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/config"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/git/repo"
