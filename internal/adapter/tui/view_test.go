@@ -117,26 +117,32 @@ func TestLowTerminalHidesEventBox(t *testing.T) {
 	}
 }
 
-// 非フォーカスの枠・見出しは faint(SGR 2) ではなく色 8（明るい黒＝グレー）で描く。
-// faint は減光しない端末が多くフォーカス差が見えないため、明示的な色にした回帰テスト。
-func TestNonFocusBorderUsesColor8(t *testing.T) {
+// フォーカス廃止後、全ペインの枠・見出しは常に色 8（明るい黒＝グレー）で描く（faint(SGR 2)
+// ではない）。一方、フローティングダイアログの枠はアクセント色（シアン＝色 6）で周囲から
+// 浮かせる。faint は減光しない端末が多く差が見えないため、明示的な色にした回帰テスト。
+func TestBorderColorsGreyPanesAccentDialog(t *testing.T) {
 	old := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.ANSI)
 	defer lipgloss.SetColorProfile(old)
 
 	border := styBorder.Render("│")
 	if !strings.Contains(border, "\x1b[90m") {
-		t.Errorf("非フォーカスボーダーは色 8（\\x1b[90m）で描くべき: %q", border)
+		t.Errorf("ペインのボーダーは色 8（\\x1b[90m）で描くべき: %q", border)
 	}
 	if strings.Contains(border, "\x1b[2m") {
-		t.Errorf("非フォーカスボーダーに faint（SGR 2）を使ってはいけない: %q", border)
+		t.Errorf("ペインのボーダーに faint（SGR 2）を使ってはいけない: %q", border)
 	}
 	title := styPaneTitle.Render("イベント")
 	if !strings.Contains(title, "\x1b[90m") {
-		t.Errorf("非フォーカス見出しは色 8（\\x1b[90m）で描くべき: %q", title)
+		t.Errorf("ペイン見出しは色 8（\\x1b[90m）で描くべき: %q", title)
 	}
 	if strings.Contains(title, "\x1b[2m") {
-		t.Errorf("非フォーカス見出しに faint（SGR 2）を使ってはいけない: %q", title)
+		t.Errorf("ペイン見出しに faint（SGR 2）を使ってはいけない: %q", title)
+	}
+	// ダイアログの枠・見出しはアクセント色（色 6＝\x1b[36m）。
+	dialogBorder := styDialogBorder.Render("│")
+	if !strings.Contains(dialogBorder, "\x1b[36m") {
+		t.Errorf("ダイアログのボーダーはアクセント色（\\x1b[36m）で描くべき: %q", dialogBorder)
 	}
 }
 
@@ -191,6 +197,18 @@ func TestViewTinyTerminalNoPanic(t *testing.T) {
 		m.Update(tea.WindowSizeMsg{Width: sz.w, Height: sz.h})
 		if got := m.View(); got == "" {
 			t.Errorf("View(%dx%d) は非空を返すべき", sz.w, sz.h)
+		}
+		// ダイアログが画面より大きくなりうる狭小端末でも、オーバーレイ合成が panic しない。
+		m.formAlias = ""
+		m.form = newAliasForm(&m.formAlias, m.dialogInnerW())
+		m.formKind = formAlias
+		if got := m.View(); got == "" {
+			t.Errorf("フォームダイアログ表示中の View(%dx%d) は非空を返すべき", sz.w, sz.h)
+		}
+		m.form, m.formKind = nil, formNone
+		m.Update(opDoneMsg{summary: "doctor", doctorText: []string{"line-a", "line-b"}})
+		if got := m.View(); got == "" {
+			t.Errorf("doctor ダイアログ表示中の View(%dx%d) は非空を返すべき", sz.w, sz.h)
 		}
 	}
 }
@@ -254,65 +272,85 @@ func TestPadDisplayFixesWidth(t *testing.T) {
 // ヘルプ行はフォーカス文脈ごとに主要な操作ラベルを bubbles/help で描く。ここでは
 // helpLine のハードコードを keymap + help へ移した後も、文脈別の項目が欠けていない
 // ことを担保する（キー挙動自体の不変は model_test のキー操作テストが裏付ける）。
-func TestHelpLineTreeContext(t *testing.T) {
+func TestHelpLineMergedContext(t *testing.T) {
 	m := newTestModel(t)
-	m.focus = focusTree
 	view := m.View()
-	for _, want := range []string{"switch", "作成", "doctor", "削除", "再起動"} {
+	// フォーカス廃止後、ツリーのキーとグローバル化したログのキーが同じ 1 行に共存する
+	// （前方の主要項目は幅 120 で省略されない）。
+	for _, want := range []string{"switch", "作成", "削除", "doctor", "追従", "フィルタ", "前世代"} {
 		if !strings.Contains(view, want) {
-			t.Errorf("focusTree のヘルプ行に %q が無い", want)
+			t.Errorf("通常時のヘルプ行に %q が無い", want)
 		}
 	}
 }
 
-func TestHelpLineLogContext(t *testing.T) {
+// doctorMode は中央のフローティングダイアログに doctor の結果テキストを表示し、背後の
+// 右ペイン（ログ）はそのまま残る。ダイアログには見出しとアクセント色のボーダーが付く。
+func TestDoctorDialogShowsResult(t *testing.T) {
 	m := newTestModel(t)
-	m.focus = focusLog
-	view := m.View()
-	for _, want := range []string{"追従", "フィルタ", "前世代", "折り返し"} {
-		if !strings.Contains(view, want) {
-			t.Errorf("focusLog のヘルプ行に %q が無い", want)
-		}
-	}
-}
-
-// doctorMode は右ペインに doctor の結果テキストを表示する。
-func TestDoctorModeShowsResult(t *testing.T) {
-	m := newTestModel(t)
-	m.doctorText = []string{"問題は見つかりませんでした"}
-	m.doctorMode = true
+	m.cfg = serverCfg()
+	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}}})
+	m.buildNodes()
+	m.curKey = "feat-a\x00api/backend"
+	m.bufs[m.curKey] = newRing(10)
+	m.bufs[m.curKey].push("hello-log-line")
 	m.rebuildLog()
+	// doctor 結果へ遷移（ダイアログ用ビューポートを組む）。
+	m.Update(opDoneMsg{summary: "doctor 完了", doctorText: []string{"問題は見つかりませんでした"}})
 
 	view := m.View()
 	if !strings.Contains(view, "問題は見つかりませんでした") {
 		t.Error("doctor 結果のテキストが表示されていない")
 	}
 	if !strings.Contains(view, "doctor 結果") {
-		t.Error("doctor 結果の見出しが表示されていない")
+		t.Error("doctor 結果ダイアログの見出しが表示されていない")
+	}
+	// ダイアログは中央のため、背後の右ペイン（ログ）のログ本文は上下いずれかに残る。
+	if !strings.Contains(view, "hello-log-line") {
+		t.Error("doctor ダイアログの背後に残るログ本文が消えている")
 	}
 }
 
-// フォーム表示中は入力が右ペインへ向かうため、m.focus がツリーのままでも右の枠が
-// フォーカス色になり、左の枠は消灯する（枠は「いまキーがどこへ効くか」を示す）。
-func TestFormFocusLightsRightPane(t *testing.T) {
+// フォーム・doctor はフローティングダイアログとして中央へ重ねられる: ダイアログの見出し・
+// 中身が中央付近の行に現れ、背後のベース画面（WORKTREES / 最下のヘルプ行）が上下に残る。
+func TestDialogOverlayCentered(t *testing.T) {
 	m := newTestModel(t)
 	m.cfg = serverCfg()
 	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}}})
 	m.buildNodes()
-	if m.rightFocused() || !m.leftFocused() {
-		t.Fatal("初期状態はツリー点灯・右消灯のはず")
-	}
-	m.form = newAliasForm(new(string), 40)
+	m.curKey = "feat-a\x00api/backend"
+	m.bufs[m.curKey] = newRing(10)
+	m.rebuildLog()
+
+	// 別名フォームを中央ダイアログとして開く（Init でフィールドが描画される）。
+	m.formAlias = "ログイン画面"
+	m.form = newAliasForm(&m.formAlias, m.dialogInnerW())
 	m.formKind = formAlias
-	if !m.rightFocused() {
-		t.Error("フォーム表示中は右ペインの枠が点灯するべき")
+	m.form.Init()
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	if !strings.Contains(view, "別名") {
+		t.Error("フォームダイアログの見出し「別名」が出ていない")
 	}
-	if m.leftFocused() {
-		t.Error("フォーム表示中は左ペインの枠が消灯するべき")
+	// 背後のベース画面が上部に残る（上端付近の行に WORKTREES 見出しが見える）。
+	topHasBase := false
+	for _, ln := range lines[:3] {
+		if strings.Contains(ln, "WORKTREES") {
+			topHasBase = true
+			break
+		}
 	}
-	m.form, m.formKind = nil, formNone
-	m.doctorMode = true
-	if !m.rightFocused() || m.leftFocused() {
-		t.Error("doctor 表示中も右点灯・左消灯であるべき")
+	if !topHasBase {
+		t.Error("ダイアログの上にベース画面（WORKTREES）が残っていない")
+	}
+	// 最下のヘルプ行はダイアログの外（ベース画面）に残る。フォーム表示中はフォーム文脈の
+	// ヘルプ（Esc 中止 など）が出る。
+	if !strings.Contains(lines[len(lines)-1], "中止") {
+		t.Errorf("最下のヘルプ行がダイアログに潰されている: %q", lines[len(lines)-1])
+	}
+	// フォームの中身（プリフィルされた別名）がダイアログ内に描かれる。
+	if !strings.Contains(view, "ログイン画面") {
+		t.Error("フォームの中身がダイアログに描かれていない")
 	}
 }

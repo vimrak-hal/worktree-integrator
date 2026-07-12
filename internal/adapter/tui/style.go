@@ -35,17 +35,19 @@ var (
 	styMarkCrashed = lipgloss.NewStyle().Foreground(colorError)
 	styMarkStopped = lipgloss.NewStyle().Faint(true)
 
-	// ペインの角丸ボーダー。フォーカス側は colorAccent、非フォーカス側は colorMuted。
-	// どちらのペインを操作しているかをボーダー色で示す（反転は使わない）。非フォーカスは
-	// faint(SGR 2) だと減光しない端末で区別が見えないため、明示的な色（グレー）で描く。
-	styBorder      = lipgloss.NewStyle().Foreground(colorMuted)
-	styBorderFocus = lipgloss.NewStyle().Foreground(colorAccent)
+	// ペインの角丸ボーダー。フォーカスの概念は廃止したため全ペイン（WORKTREES・イベント・
+	// ログ）とも常にグレー（colorMuted）で描く。「いま何に効くか」はツリーの ▌ カーソルと
+	// ダイアログの存在で示す。faint(SGR 2) は減光しない端末があるため明示的な色（グレー）を使う。
+	styBorder = lipgloss.NewStyle().Foreground(colorMuted)
 
-	// ペイン見出し（上辺のボーダーへ埋め込む文字列）。フォーカス側は colorAccent+太字、
-	// 非フォーカス側は colorMuted。ボーダー色と揃えてフォーカスを一目で分かるようにする
-	// （非フォーカスは faint ではなく明示的な色。二重にすると余計に環境差が出る）。
-	styPaneTitle      = lipgloss.NewStyle().Foreground(colorMuted)
-	styPaneTitleFocus = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	// ペイン見出し（上辺のボーダーへ埋め込む文字列）。ボーダーと揃えて常にグレー。
+	styPaneTitle = lipgloss.NewStyle().Foreground(colorMuted)
+
+	// フローティングダイアログ（フォーム・doctor）の角丸ボーダーと見出し。周囲のグレーな
+	// ペインから浮かせるためアクセント色（colorAccent）で描き、見出しはアクセント太字。
+	// 旧フォーカス用スタイル（styBorderFocus / styPaneTitleFocus）の転用。
+	styDialogBorder = lipgloss.NewStyle().Foreground(colorAccent)
+	styDialogTitle  = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 
 	// ツリーの選択行。反転はやめ、行頭に colorAccent の ▌ インジケータを立て、行本文は
 	// 太字にする（非選択行は行頭 1 桁の空白で整列を保つ）。

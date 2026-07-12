@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // visibleEvents はイベントボックスに表示するイベント履歴の行数。
@@ -17,14 +18,29 @@ const eventBoxInnerH = 1 + visibleEvents
 
 // View は現在のモデルを 1 画面に描画する。レイアウトは lazygit / charm 風の 2 カラム:
 // 左カラムは上「WORKTREES」（ツリーノード）+ 下「イベント」の 2 ボックスを縦積みにし、
-// 右カラム（ログ／doctor 結果／フォーム）は全高 1 ボックス。それぞれ角丸ボーダーで囲み、
-// 見出しは上辺のボーダーに埋め込む。フォーカス中のペインはボーダー色（colorAccent）で
-// 示す（イベントボックスはフォーカス対象にせず常に非フォーカス色）。各ボーダーは左右
-// 2 桁・上下 2 行を消費する。ヘルプ行だけはボーダーの外、画面最下に置く。
+// 右カラム（ログ）は全高 1 ボックス。それぞれ角丸ボーダーで囲み、見出しは上辺のボーダーに
+// 埋め込む。フォーカスの概念は無いため全ボックスのボーダー・見出しは常にグレー（colorMuted）
+// で、いま何に効くかはツリーの ▌ カーソルとダイアログの存在で示す。フォーム・doctor は
+// 画面中央のフローティングダイアログとしてベース画面へ ANSI セーフに重ねる。各ボーダーは
+// 左右 2 桁・上下 2 行を消費する。ヘルプ行だけはボーダーの外、画面最下に置く。
 func (m *model) View() string {
 	if !m.ready {
 		return "起動中…"
 	}
+	base := m.baseLines()
+	// フォーム・doctor は中央のフローティングダイアログとしてベース画面へ重ねる（form は
+	// 通常時のみ開くため doctor より優先）。
+	switch {
+	case m.form != nil:
+		base = overlayCentered(base, m.formDialog(), m.width)
+	case m.doctorMode:
+		base = overlayCentered(base, m.doctorDialog(), m.width)
+	}
+	return strings.Join(base, "\n")
+}
+
+// baseLines はダイアログを重ねる前のベース画面を行の並びで返す（本文 + 最下のヘルプ行）。
+func (m *model) baseLines() []string {
 	// 左右のボックス総幅と、その内側（ボーダーを除いた）幅・高さ。負値・0 は防御的に
 	// 1 へ丸める（超狭小端末で panic させない）。
 	leftW := m.leftW()
@@ -34,32 +50,25 @@ func (m *model) View() string {
 	innerH := max(1, m.height-3)
 
 	leftBox := m.leftColumn(leftInner, innerH)
-	rightBox := m.renderBox(m.logTitle(), m.rightLines(), rightInner, innerH, m.rightFocused())
+	// 右ペインは常にログ（doctor は別ダイアログ、form も別ダイアログ）。
+	rightBox := m.renderBox(m.logTitle(), m.rightLines(), rightInner, innerH)
 
-	var b strings.Builder
+	out := make([]string, 0, len(leftBox)+1)
 	for i := range leftBox {
-		if i > 0 {
-			b.WriteString("\n")
-		}
 		// 左右のボックスを横に連結し、右端のはみ出しは端末幅に収める。
-		b.WriteString(truncLine(leftBox[i]+rightBox[i], m.width))
+		out = append(out, truncLine(leftBox[i]+rightBox[i], m.width))
 	}
-	b.WriteString("\n")
 	// ヘルプ行は文脈別の Binding 列を help.Model が描く（キー=colorAccent 太字・説明=
 	// faint・区切り " · "）。ボーダーの外、画面最下に置く。
-	b.WriteString(truncLine(m.help.ShortHelpView(m.contextBindings()), m.width))
-	return b.String()
+	out = append(out, truncLine(m.help.ShortHelpView(m.contextBindings()), m.width))
+	return out
 }
 
-// renderBox は content（内側の行）を角丸ボーダーで囲み、見出しを上辺へ埋め込んだ
-// innerH+2 行を返す。各行の表示幅は innerW+2。フォーカス時はボーダーを colorAccent、
-// 非フォーカス時は faint で描く。content が innerH に満たない行は空白で埋め、超えた分は
-// 捨てる。
-func (m *model) renderBox(title string, content []string, innerW, innerH int, focused bool) []string {
+// renderBox は content（内側の行）を角丸ボーダー（常にグレー）で囲み、見出しを上辺へ
+// 埋め込んだ innerH+2 行を返す。各行の表示幅は innerW+2。content が innerH に満たない
+// 行は空白で埋め、超えた分は捨てる。
+func (m *model) renderBox(title string, content []string, innerW, innerH int) []string {
 	sty := styBorder
-	if focused {
-		sty = styBorderFocus
-	}
 	out := make([]string, 0, innerH+2)
 	out = append(out, borderTop(title, innerW, sty))
 	bar := sty.Render("│")
@@ -92,62 +101,22 @@ func borderTop(title string, innerW int, sty lipgloss.Style) string {
 	return sty.Render("╭─ ") + t + sty.Render(" "+strings.Repeat("─", rest)+"╮")
 }
 
-// rightFocused は「入力が右ペインへ向かっているか」を返す。フォーム・doctor 結果の
-// 表示中はキーが右ペインの内容（huh / スクロール）に届くため、m.focus がツリーの
-// ままでも右の枠を光らせる。枠の色は m.focus そのものではなく「いまキーがどこへ
-// 効くか」を示す。
-func (m *model) rightFocused() bool {
-	return m.form != nil || m.doctorMode || m.focus == focusLog
-}
-
-// leftFocused は「入力がツリーへ向かっているか」を返す。フォーム・doctor 表示中は
-// キーがツリーに届かないため、rightFocused と排他になるようこちらは消灯する。
-func (m *model) leftFocused() bool {
-	return m.form == nil && !m.doctorMode && m.focus == focusTree
-}
-
-// leftTitle は左ペインの見出し。
+// leftTitle は左ペインの見出し（常にグレー）。
 func (m *model) leftTitle() string {
-	return m.paneTitle("WORKTREES", m.leftFocused())
+	return styPaneTitle.Render("WORKTREES")
 }
 
-// paneTitle はペイン見出しを、フォーカスの有無で色分けして描く（フォーカス=colorAccent+
-// 太字、非フォーカス=グレー）。ボーダー色（leftFocused/rightFocused）と同じ判定を
-// 渡して枠と見出しの色を常に一致させる。
-func (m *model) paneTitle(label string, focused bool) string {
-	if focused {
-		return styPaneTitleFocus.Render(label)
-	}
-	return styPaneTitle.Render(label)
-}
-
-// logTitle は右ペインの見出し: 対象（repo/server @ worktree）と、モードのフラグ
-// （追従・前世代・フィルタ／入力中の input.View()）をピルで添える。doctor 結果・
-// フォーム表示中は専用の見出し。
+// logTitle は右ペインの見出し（常にグレー）: 対象（repo/server @ worktree）と、モードの
+// フラグ（追従・前世代・フィルタ／入力中の input.View()）をピルで添える。フォーム・doctor は
+// 別のフローティングダイアログで描くため、この見出しは常にログの見出しになる。
 func (m *model) logTitle() string {
-	if m.form != nil {
-		// フォーム表示中は種類ごとの見出しに切り替える。
-		label := "入力中"
-		switch m.formKind {
-		case formCreate:
-			label = "worktree 作成"
-		case formAlias:
-			label = "別名"
-		case formRemove:
-			label = "削除の確認"
-		}
-		return m.paneTitle(label, m.rightFocused())
-	}
-	if m.doctorMode {
-		return m.paneTitle("doctor 結果", m.rightFocused())
-	}
 	label := "ログ"
 	if m.curKey != "" {
 		if wt, repo, srv, ok := splitKey(m.curKey); ok {
 			label = fmt.Sprintf("ログ: %s/%s @ %s", repo, srv, wt)
 		}
 	}
-	title := m.paneTitle(label, m.rightFocused())
+	title := styPaneTitle.Render(label)
 	if pills := m.logPills(); pills != "" {
 		title += " " + pills
 	}
@@ -182,22 +151,21 @@ func (m *model) logPills() string {
 // 行数を揃えるため innerH+2 行を返す。イベントボックスは内側高さ固定（eventBoxInnerH）で、
 // 残りがツリーボックスになる。端末が低くツリー本体に最低 3 行を確保できないときは退避して
 // イベントボックスを出さず、従来どおりツリーボックスのみ（状態行はツリー最下行へ、イベント
-// は非表示）にする。イベントボックスはフォーカス対象にしないため常に非フォーカス色で描く。
+// は非表示）にする。ボーダー・見出しはフォーカス廃止により常にグレー。
 func (m *model) leftColumn(innerW, innerH int) []string {
 	// 左カラム全体は右ボックスと同じ innerH+2 行を占める。イベントボックス（上下ボーダー
 	// 込みで eventBoxInnerH+2 行）を引いた残りがツリーボックスの領域。
 	treeInnerH := innerH - eventBoxInnerH - 2
 	// 退避: イベントボックス + ツリー最低 3 行を確保できないときはツリーボックスのみ。
 	if treeInnerH < 3 {
-		return m.renderBox(m.leftTitle(), m.treeOnlyLines(innerH), innerW, innerH, m.leftFocused())
+		return m.renderBox(m.leftTitle(), m.treeOnlyLines(innerH), innerW, innerH)
 	}
-	treeBox := m.renderBox(m.leftTitle(), m.visibleNodeLines(treeInnerH), innerW, treeInnerH, m.leftFocused())
-	eventBox := m.renderBox(m.eventTitle(), m.eventLines(), innerW, eventBoxInnerH, false)
+	treeBox := m.renderBox(m.leftTitle(), m.visibleNodeLines(treeInnerH), innerW, treeInnerH)
+	eventBox := m.renderBox(m.eventTitle(), m.eventLines(), innerW, eventBoxInnerH)
 	return append(treeBox, eventBox...)
 }
 
-// eventTitle はイベントボックスの見出し。イベントボックスはフォーカス対象にしないため
-// 常に非フォーカス色で描く。
+// eventTitle はイベントボックスの見出し（常にグレー）。
 func (m *model) eventTitle() string {
 	return styPaneTitle.Render("イベント")
 }
@@ -370,14 +338,105 @@ func markColored(n node) string {
 	}
 }
 
-// rightLines は右ペインの行を返す。huh フォーム表示中はフォームを、それ以外は
-// ビューポート（ログ／doctor 結果）を描く。フォームは通常時のみ開くため doctor
-// 結果より優先してよい。
+// rightLines は右ペインの行（常にログのビューポート）を返す。フォーム・doctor は中央の
+// フローティングダイアログで描くため、右ペインは常にログを出す。
 func (m *model) rightLines() []string {
-	if m.form != nil {
-		return strings.Split(m.form.View(), "\n")
-	}
 	return strings.Split(m.vp.View(), "\n")
+}
+
+// formDialog はフォーム（作成・別名・削除確認）を中央フローティングダイアログの行の並びで
+// 組む。角丸ボーダー（colorAccent）+ 上辺にアクセント太字の種類見出し。高さは huh フォームの
+// 内容に合わせるため、フォーム描画の末尾の空行を落としてから箱に収める。
+func (m *model) formDialog() []string {
+	label := "入力中"
+	switch m.formKind {
+	case formCreate:
+		label = "worktree 作成"
+	case formAlias:
+		label = "別名"
+	case formRemove:
+		label = "削除の確認"
+	}
+	content := trimTrailingBlank(strings.Split(m.form.View(), "\n"))
+	// 天井: 画面高から溢れないよう内容を切り詰める（ダイアログ + 上下ボーダーで height 未満に）。
+	if cap := max(1, m.height-4); len(content) > cap {
+		content = content[:cap]
+	}
+	return renderDialogBox(styDialogTitle.Render(label), content, m.dialogInnerW())
+}
+
+// doctorDialog は doctor 結果を中央の大きめフローティングダイアログの行の並びで組む。内容は
+// 専用ビューポート（dvp）から取り、スクロール位置はキー操作で dvp が保持する。
+func (m *model) doctorDialog() []string {
+	content := strings.Split(m.dvp.View(), "\n")
+	return renderDialogBox(styDialogTitle.Render("doctor 結果"), content, m.doctorInnerW())
+}
+
+// renderDialogBox は content をアクセント色の角丸ボーダーで囲み、上辺へ見出し title（描画
+// 済み）を埋め込んだ行の並びを返す。renderBox と違い高さは content に合わせ、固定行数の
+// パディングはしない（ダイアログは内容ぴったりに収める）。
+func renderDialogBox(title string, content []string, innerW int) []string {
+	sty := styDialogBorder
+	out := make([]string, 0, len(content)+2)
+	out = append(out, borderTop(title, innerW, sty))
+	bar := sty.Render("│")
+	for _, line := range content {
+		out = append(out, bar+padDisplay(line, innerW)+bar)
+	}
+	out = append(out, sty.Render("╰"+strings.Repeat("─", innerW)+"╯"))
+	return out
+}
+
+// overlayCentered はダイアログ dialog をベース画面 base の中央へ ANSI セーフに重ねる。各
+// ダイアログ行について、対応するベース行を「左部分 + ダイアログ行 + 右部分」へ x/ansi の
+// Truncate（左を桁数で切る）と TruncateLeft（左 x+幅 桁を落として右を得る）で接合する。
+// 接合部ではスタイルのにじみを防ぐため \x1b[0m でリセットしてから各部を書く。ダイアログが
+// 画面より大きい・端に寄る場合も範囲外行は捨てて panic させない。
+func overlayCentered(base, dialog []string, width int) []string {
+	if len(dialog) == 0 {
+		return base
+	}
+	dw := 0
+	for _, dl := range dialog {
+		if w := lipgloss.Width(dl); w > dw {
+			dw = w
+		}
+	}
+	x := max(0, (width-dw)/2)
+	y := max(0, (len(base)-len(dialog))/2)
+	out := make([]string, len(base))
+	copy(out, base)
+	for i, dl := range dialog {
+		row := y + i
+		if row < 0 || row >= len(out) {
+			continue
+		}
+		out[row] = spliceLine(out[row], dl, x, dw)
+	}
+	return out
+}
+
+// spliceLine はベース行 base の桁 [x, x+dw) をダイアログ行 dl で置き換えた 1 行を返す。左
+// 部分はちょうど x 桁へパディングし、右部分は base の x+dw 桁以降。接合部は \x1b[0m で
+// リセットしてからつなぎ、左のベース色が dl へ、dl の色が右のベースへにじむのを防ぐ。
+func spliceLine(base, dl string, x, dw int) string {
+	left := padDisplay(ansi.Truncate(base, x, ""), x)
+	right := ansi.TruncateLeft(base, x+dw, "")
+	return left + "\x1b[0m" + dl + "\x1b[0m" + right
+}
+
+// trimTrailingBlank は末尾の空行（表示可能な文字を持たない行）を落とす。huh フォームが
+// WithHeight ぶんの空行でパディングするため、ダイアログを内容ぴったりに収める前処理に使う。
+func trimTrailingBlank(lines []string) []string {
+	end := len(lines)
+	for end > 0 && strings.TrimSpace(ansi.Strip(lines[end-1])) == "" {
+		end--
+	}
+	if end == 0 {
+		// 全行が空でも 1 行は残す（空のダイアログでも箱を描けるように）。
+		return []string{""}
+	}
+	return lines[:end]
 }
 
 // noteLine はフッターの一時メッセージ行（左ペインのボーダー内に置く）。
