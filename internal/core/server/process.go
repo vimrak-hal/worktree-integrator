@@ -152,6 +152,13 @@ func (u *UnixProcess) Alive(id proc.Ident) bool {
 	if !groupAlive(id.Pgid) {
 		return false
 	}
+	// kill(-pgid, 0) が生存を示しても、メンバーがすべてゾンビ（SIGKILL 済みだが
+	// 未回収）なら実行は終わっている。PID 1 が最小 init のコンテナ環境では孤児が
+	// 回収されず、この判定が無いとグループは永遠に生存扱いになる（誤殺は Ident の
+	// 同一性照合で防がれるため、消滅扱いにしてもリスクは増えない）。
+	if proc.GroupReaped(id.Pgid) {
+		return false
+	}
 	st, err := proc.StartTime(id.Pid)
 	switch {
 	case errors.Is(err, proc.ErrGone):
@@ -187,13 +194,18 @@ func (u *UnixProcess) StopGroup(ctx context.Context, id proc.Ident, grace time.D
 		return nil
 	}
 
-	// クリーンな終了を grace の間まで待つ（キャンセルで打ち切る）。
+	// クリーンな終了を grace の間まで待つ。キャンセルは待機を打ち切るが、ここで
+	// 早期リターンはしない: ループ条件が偽になり、下の SIGKILL へ早期エスカレートする。
 	deadline := time.Now().Add(grace)
 	for time.Now().Before(deadline) && ctx.Err() == nil {
 		if !u.Alive(id) {
 			return nil
 		}
-		time.Sleep(pollInterval)
+		select {
+		case <-ctx.Done():
+			// 次の反復で ctx.Err() != nil によりループを抜け、SIGKILL へ進む。
+		case <-time.After(pollInterval):
+		}
 	}
 
 	// まだ生存している: 強制終了する。
