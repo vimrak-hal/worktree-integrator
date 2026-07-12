@@ -13,29 +13,20 @@ import (
 	"os"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/app/server"
-	corealias "github.com/vimrak-hal/worktree-integrator/internal/core/alias"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/config"
-	coreserver "github.com/vimrak-hal/worktree-integrator/internal/core/server"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/childio"
-	"github.com/vimrak-hal/worktree-integrator/internal/infra/statedir"
 )
 
 // Deps は tree ワークフロー群の依存の束。App が自身のフィールドと解決済みの
-// ディレクトリから構築する。
+// ディレクトリから構築する。server ワークフローと共通の依存（Proc / Store / Aliases /
+// Root / Events）は server.Deps を埋め込んで共有し、tree 固有の依存だけを重ねる。
+// フィールド追加時の同期箇所を 1 つに保つための埋め込みである。
 type Deps struct {
-	// Proc はプロセス制御のバックエンド（remove のサーバー停止・list / doctor の
-	// 生存確認）。
-	Proc coreserver.ProcessControl
-	// Store は状態ストア。
-	Store *coreserver.StateStore
-	// Aliases は表示用別名のストア。
-	Aliases *corealias.Store
-	// Root は状態ルート（repo 操作ロック・ログディレクトリの導出元）。
-	Root statedir.Root
+	// Deps は server ワークフロー共通の依存（Proc / Store / Aliases / Root / Events）。
+	// remove のサーバー停止がこの束をそのまま再利用する。
+	server.Deps
 	// ChildIO はフック（enter の after フック）の子プロセスに与える標準ストリーム。
 	ChildIO childio.Streams
-	// Events はサーバーイベント（remove の停止）の逐次通知先（nil 可）。
-	Events func(repo, server string, ev coreserver.Event)
 	// Config は読み込み済みの設定ファイル（サーバー定義・フック・[repos.<name>]）。
 	Config *config.File
 	// ReposDir / WorktreesDir は解決済みのベースディレクトリ。
@@ -43,15 +34,10 @@ type Deps struct {
 	WorktreesDir string
 }
 
-// serverDeps は remove のサーバー停止が再利用する app/server の依存束を構築する。
+// serverDeps は remove のサーバー停止が再利用する app/server の依存束を返す（埋め込んだ
+// server.Deps をそのまま返すだけ）。
 func (d Deps) serverDeps() server.Deps {
-	return server.Deps{
-		Proc:    d.Proc,
-		Store:   d.Store,
-		Aliases: d.Aliases,
-		Root:    d.Root,
-		Events:  d.Events,
-	}
+	return d.Deps
 }
 
 // isDir は path が既存のディレクトリかどうかを返す（シンボリックリンクをたどる）。

@@ -20,12 +20,10 @@ import (
 // する形になる。
 func newApp(t *testing.T) *App {
 	t.Helper()
-	return &App{
-		Config:  &config.File{},
-		Root:    statedir.At(t.TempDir()),
-		ChildIO: childio.Streams{},
-		Proc:    serverfake.New(),
-	}
+	a := New(&config.File{}, statedir.At(t.TempDir()), childio.Streams{})
+	// Proc はプロセスを起動しないフェイクへ差し替える（本番の UnixProcess は使わない）。
+	a.Proc = serverfake.New()
+	return a
 }
 
 func mustName(t *testing.T, raw string) action.Name {

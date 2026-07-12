@@ -23,6 +23,7 @@ import (
 	"github.com/vimrak-hal/worktree-integrator/internal/core/git/worktree"
 	coreserver "github.com/vimrak-hal/worktree-integrator/internal/core/server"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/childio"
+	"github.com/vimrak-hal/worktree-integrator/internal/infra/procctl"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/statedir"
 )
 
@@ -59,6 +60,39 @@ type App struct {
 	Progress Progress
 }
 
+// New は全ワークフロー共通の依存束を構築する。ChildIO と Proc は必ず同じ streams から
+// 導出する不変条件を持つ: フック・サーバーライフサイクルの子プロセスに与える標準
+// ストリーム（ChildIO）と、procctl が起動するサーバープロセスに与える標準ストリーム
+// （Proc）が食い違うと、フックとサーバーの stdio が別々の宛先を指す事故になる。両者を
+// 個別に受け取らず streams 1 つからペアで導出することで、この不変条件を構築時に閉じる。
+// 任意の依存（Selector / Progress）は Option で与える（既定はどちらも nil）。
+func New(cfg *config.File, root statedir.Root, streams childio.Streams, opts ...Option) *App {
+	a := &App{
+		Config:  cfg,
+		Root:    root,
+		ChildIO: streams,
+		Proc:    procctl.NewUnixProcess(streams),
+	}
+	for _, opt := range opts {
+		opt(a)
+	}
+	return a
+}
+
+// Option は New に渡す任意依存の設定関数。
+type Option func(*App)
+
+// WithSelector は create の対話的リポジトリ選択器を設定する（CLI の TTY 時のみ）。
+func WithSelector(s create.Selector) Option {
+	return func(a *App) { a.Selector = s }
+}
+
+// WithProgress は進捗通知先を設定する（CLI: 端末描画 / MCP: 取り込みバッファ /
+// TUI: 画面転送）。
+func WithProgress(p Progress) Option {
+	return func(a *App) { a.Progress = p }
+}
+
 // reporter は Progress を worktree.Reporter として返す（nil なら nil のまま —
 // create.Deps 側が無通知の実装に差し替える）。
 func (a *App) reporter() worktree.Reporter {
@@ -90,8 +124,8 @@ func (a *App) Create(ctx context.Context, act action.Create) (*create.Result, er
 
 // treeDeps は tree ワークフロー（list / enter / remove / doctor）共通の依存を構築
 // する。これらは解決済みアクションを取らないため、ディレクトリの解決（設定と
-// WT_* 環境変数）はここで行う。返される取得関数は serverDeps と同じ LegacyBackup の
-// 通知である。
+// WT_* 環境変数）はここで行う。server ワークフロー共通の依存（状態ストアと退避先の
+// 捕捉を含む）は serverDeps を土台に使い、tree 固有の依存だけを重ねる。
 func (a *App) treeDeps() (tree.Deps, func() string, error) {
 	reposDir, err := action.ReposDir("", a.Config, os.Getenv, os.UserHomeDir)
 	if err != nil {
@@ -101,21 +135,15 @@ func (a *App) treeDeps() (tree.Deps, func() string, error) {
 	if err != nil {
 		return tree.Deps{}, nil, err
 	}
-	store := coreserver.NewStateStore(a.Root)
-	var legacyBak string
-	store.OnLegacy = func(bak string) { legacyBak = bak }
+	sdeps, legacy := a.serverDeps()
 	deps := tree.Deps{
-		Proc:         a.Proc,
-		Store:        store,
-		Aliases:      corealias.NewStore(a.Root),
-		Root:         a.Root,
+		Deps:         sdeps,
 		ChildIO:      a.ChildIO,
-		Events:       a.serverEvents(),
 		Config:       a.Config,
 		ReposDir:     reposDir,
 		WorktreesDir: worktreesDir,
 	}
-	return deps, func() string { return legacyBak }, nil
+	return deps, legacy, nil
 }
 
 // List は worktree の一覧（inventory・別名・サーバー状態の統合ビュー）を返す。
@@ -125,10 +153,7 @@ func (a *App) List(ctx context.Context) (*tree.ListResult, error) {
 		return nil, err
 	}
 	res, err := tree.List(ctx, deps)
-	if res != nil {
-		res.LegacyBackup = legacy()
-	}
-	return res, err
+	return finishLegacy(res, legacy), err
 }
 
 // Enter は既存の worktree への遷移（after フックのみの実行）を行う。
@@ -148,10 +173,7 @@ func (a *App) Remove(ctx context.Context, act action.Remove) (*tree.RemoveResult
 		return nil, err
 	}
 	res, err := tree.Remove(ctx, deps, act)
-	if res != nil {
-		res.LegacyBackup = legacy()
-	}
-	return res, err
+	return finishLegacy(res, legacy), err
 }
 
 // Doctor は自己診断を実行し、fix なら修復可能な発見をその場で修復する。
@@ -161,15 +183,13 @@ func (a *App) Doctor(ctx context.Context, fix bool) (*tree.DoctorResult, error) 
 		return nil, err
 	}
 	res, err := tree.Doctor(ctx, deps, fix)
-	if res != nil {
-		res.LegacyBackup = legacy()
-	}
-	return res, err
+	return finishLegacy(res, legacy), err
 }
 
-// serverDeps は server ワークフロー共通の依存を構築する。返される取得関数は、
-// 旧形式の状態ファイルの退避（.bak）が起きた場合にその退避先を返す（Result の
-// LegacyBackup フィールドへ写すため）。
+// serverDeps は server ワークフロー共通の依存を構築する。状態ストアの生成と
+// OnLegacy フックの捕捉を行う唯一の場所であり、tree ワークフローの依存（treeDeps）も
+// この束を土台に組む。返される取得関数は、旧形式の状態ファイルの退避（.bak）が起きた
+// 場合にその退避先を返す（Result の LegacyBackup フィールドへ写すため）。
 func (a *App) serverDeps() (server.Deps, func() string) {
 	store := coreserver.NewStateStore(a.Root)
 	var legacyBak string
@@ -184,44 +204,46 @@ func (a *App) serverDeps() (server.Deps, func() string) {
 	return deps, func() string { return legacyBak }
 }
 
+// finishLegacy は Result に退避先（旧形式状態ファイルの .bak パス、無ければ空文字列）を
+// 書き込んで返す。7 つの Result 型が「res があれば res.SetLegacyBackup(legacy())」を
+// 個別に繰り返していたのを 1 形に畳む。res が nil のワークフロー（早期エラー）では何も
+// 書かずにそのまま返す。
+func finishLegacy[T any, R interface {
+	*T
+	SetLegacyBackup(string)
+}](res R, legacy func() string) R {
+	if res != nil {
+		res.SetLegacyBackup(legacy())
+	}
+	return res
+}
+
 // ServerSwitch は対象リポジトリのサーバーを cmd/k の worktree へ切り替える。
 func (a *App) ServerSwitch(ctx context.Context, cmd action.ServerCommand, k action.SwitchKind) (*server.SwitchResult, error) {
 	deps, legacy := a.serverDeps()
 	res, err := server.Switch(ctx, deps, cmd, k)
-	if res != nil {
-		res.LegacyBackup = legacy()
-	}
-	return res, err
+	return finishLegacy(res, legacy), err
 }
 
 // ServerStatus は（repo × server）ごとの状態を返す。
 func (a *App) ServerStatus(ctx context.Context, cmd action.ServerCommand) (*server.StatusResult, error) {
 	deps, legacy := a.serverDeps()
 	res, err := server.Status(ctx, deps, cmd)
-	if res != nil {
-		res.LegacyBackup = legacy()
-	}
-	return res, err
+	return finishLegacy(res, legacy), err
 }
 
 // ServerStop は対象サーバーを停止する。
 func (a *App) ServerStop(ctx context.Context, cmd action.ServerCommand, k action.StopKind) (*server.StopResult, error) {
 	deps, legacy := a.serverDeps()
 	res, err := server.Stop(ctx, deps, cmd, k)
-	if res != nil {
-		res.LegacyBackup = legacy()
-	}
-	return res, err
+	return finishLegacy(res, legacy), err
 }
 
 // ServerLogs は対象サーバーのログ末尾を読み取る。
 func (a *App) ServerLogs(ctx context.Context, cmd action.ServerCommand, k action.LogsKind) (*server.LogsResult, error) {
 	deps, legacy := a.serverDeps()
 	res, err := server.Logs(ctx, deps, cmd, k)
-	if res != nil {
-		res.LegacyBackup = legacy()
-	}
-	return res, err
+	return finishLegacy(res, legacy), err
 }
 
 // AliasSet は worktree の表示用別名を設定し、正規化後に保存された値を返す

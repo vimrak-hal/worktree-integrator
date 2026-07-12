@@ -20,6 +20,9 @@ type ListResult struct {
 	LegacyBackup string `json:"legacy_state_backup,omitempty"`
 }
 
+// SetLegacyBackup は旧形式状態ファイルの退避先を記録する（App が退避の有無を写す）。
+func (r *ListResult) SetLegacyBackup(bak string) { r.LegacyBackup = bak }
+
 // WorktreeRow は list テーブルの 1 行。
 type WorktreeRow struct {
 	// Name は worktree 名（worktrees_dir からの相対パス）。

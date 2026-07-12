@@ -43,12 +43,9 @@ func lifecycleApp(t *testing.T) (a *App, fake *serverfake.Fake, repoA string) {
 		},
 	}
 	fake = serverfake.New()
-	a = &App{
-		Config:  cfg,
-		Root:    statedir.At(t.TempDir()),
-		ChildIO: childio.Streams{},
-		Proc:    fake,
-	}
+	a = New(cfg, statedir.At(t.TempDir()), childio.Streams{})
+	// Proc はプロセスを起動しないフェイクへ差し替える（本番の UnixProcess は使わない）。
+	a.Proc = fake
 	return a, fake, repoA
 }
 

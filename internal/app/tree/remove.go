@@ -46,6 +46,9 @@ type RemoveResult struct {
 	LegacyBackup string `json:"legacy_state_backup,omitempty"`
 }
 
+// SetLegacyBackup は旧形式状態ファイルの退避先を記録する（App が退避の有無を写す）。
+func (r *RemoveResult) SetLegacyBackup(bak string) { r.LegacyBackup = bak }
+
 // RepoRemoval は 1 つのメンバーのチェックアウト削除の結果。
 type RepoRemoval struct {
 	Repo string `json:"repo"`

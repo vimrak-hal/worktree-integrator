@@ -30,6 +30,9 @@ type SwitchResult struct {
 	LegacyBackup string `json:"legacy_state_backup,omitempty"`
 }
 
+// SetLegacyBackup は旧形式状態ファイルの退避先を記録する（App が退避の有無を写す）。
+func (r *SwitchResult) SetLegacyBackup(bak string) { r.LegacyBackup = bak }
+
 // tally は PerServer から集計フィールドを再計算する。
 func (r *SwitchResult) tally() {
 	r.Started, r.Already, r.Skipped, r.Failed = 0, 0, 0, 0
@@ -62,6 +65,9 @@ type StopResult struct {
 	LegacyBackup string   `json:"legacy_state_backup,omitempty"`
 }
 
+// SetLegacyBackup は旧形式状態ファイルの退避先を記録する（App が退避の有無を写す）。
+func (r *StopResult) SetLegacyBackup(bak string) { r.LegacyBackup = bak }
+
 // StatusResult は `server status` の結果。
 type StatusResult struct {
 	// Rows は（repo × server）ごとの 1 行。
@@ -71,6 +77,9 @@ type StatusResult struct {
 	NoServerConfig bool     `json:"no_server_config,omitempty"`
 	LegacyBackup   string   `json:"legacy_state_backup,omitempty"`
 }
+
+// SetLegacyBackup は旧形式状態ファイルの退避先を記録する（App が退避の有無を写す）。
+func (r *StatusResult) SetLegacyBackup(bak string) { r.LegacyBackup = bak }
 
 // Row は status テーブルの 1 行。
 type Row struct {
@@ -102,6 +111,9 @@ type LogsResult struct {
 	UnknownRepos []string `json:"unknown_repos,omitempty"`
 	LegacyBackup string   `json:"legacy_state_backup,omitempty"`
 }
+
+// SetLegacyBackup は旧形式状態ファイルの退避先を記録する（App が退避の有無を写す）。
+func (r *LogsResult) SetLegacyBackup(bak string) { r.LegacyBackup = bak }
 
 // LogEntry は 1 つのサーバーログの読み取り結果。
 type LogEntry struct {

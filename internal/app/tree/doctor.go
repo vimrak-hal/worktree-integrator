@@ -30,6 +30,9 @@ type DoctorResult struct {
 	LegacyBackup string `json:"legacy_state_backup,omitempty"`
 }
 
+// SetLegacyBackup は旧形式状態ファイルの退避先を記録する（App が退避の有無を写す）。
+func (r *DoctorResult) SetLegacyBackup(bak string) { r.LegacyBackup = bak }
+
 // Finding は doctor が発見した 1 つの問題。どのフィールドが意味を持つかは Check に
 // 依存する。ユーザー向けの文言は持たず、表示層（render）が Check をキーに日本語へ
 // 変換する。

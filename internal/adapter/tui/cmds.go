@@ -19,7 +19,6 @@ import (
 	"github.com/vimrak-hal/worktree-integrator/internal/core/git/worktree"
 	coreserver "github.com/vimrak-hal/worktree-integrator/internal/core/server"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/childio"
-	"github.com/vimrak-hal/worktree-integrator/internal/infra/procctl"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/statedir"
 )
 
@@ -132,15 +131,11 @@ func (f *forwarder) ServerEvent(repo, srv string, ev coreserver.Event) {
 // 同じ理由の TUI 版）。失敗の内容は型付きの Failure（起動失敗ならログ末尾つき）で
 // 報告される。
 func buildApp(cfg *config.File, root statedir.Root, fw *forwarder) *app.App {
+	// quiet は ChildIO と procctl の両方へ同じものが渡り（app.New がペアで導出する）、
+	// ライフサイクルコマンドとサーバープロセスのどちらの出力も破棄される。Selector は
+	// 既定の nil（非対話）。
 	quiet := childio.Streams{Stdin: nil, Stdout: io.Discard, Stderr: io.Discard}
-	return &app.App{
-		Config:   cfg,
-		Root:     root,
-		ChildIO:  quiet,
-		Proc:     procctl.NewUnixProcess(quiet),
-		Selector: nil,
-		Progress: fw,
-	}
+	return app.New(cfg, root, quiet, app.WithProgress(fw))
 }
 
 // serverCommand は現在の設定から server 系ワークフローの実行コンテキストを解決する

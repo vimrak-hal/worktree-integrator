@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
+	"github.com/vimrak-hal/worktree-integrator/internal/app/server"
 	corealias "github.com/vimrak-hal/worktree-integrator/internal/core/alias"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/config"
 	coreserver "github.com/vimrak-hal/worktree-integrator/internal/core/server"
@@ -21,10 +22,12 @@ func newDeps(t *testing.T, proc coreserver.ProcessControl, cfg *config.File, rep
 	t.Helper()
 	root := statedir.At(t.TempDir())
 	return Deps{
-		Proc:         proc,
-		Store:        coreserver.NewStateStore(root),
-		Aliases:      corealias.NewStore(root),
-		Root:         root,
+		Deps: server.Deps{
+			Proc:    proc,
+			Store:   coreserver.NewStateStore(root),
+			Aliases: corealias.NewStore(root),
+			Root:    root,
+		},
 		ChildIO:      childio.Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Config:       cfg,
 		ReposDir:     reposDir,
