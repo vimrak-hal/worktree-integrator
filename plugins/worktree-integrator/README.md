@@ -44,6 +44,12 @@ base ブランチ / dev サーバー定義 / hooks / 追加ファイルコピー
   MCP 登録を一括で調査し、原因と対処コマンドをレポートします（修復そのものは行わず、
   提案のみ）。「セットアップ済みなのに動かない」ときに Claude が自動で起動するか、
   明示的に依頼して使います。
+- `worktree-integrator-hooks` — ライフサイクルフック（config.toml の `[[hooks.*]]`）の
+  設計・記述・検証を専門に行うエージェント。「worktree 作成後に依存をインストール
+  したい」「作成完了を通知したい」「Jira / cmux と連携したい」といった依頼から、
+  タイミング（`before` / `after_worktree` / `after`）と `WT_*` 環境変数を選び、既存の
+  設定を壊さずマージして `config check` で検証まで行います。hooks 以外の設定
+  （servers / copy / base 等）には触れません。
 
 詳しいツール本体の使い方は [ドキュメントサイト](https://vimrak-hal.github.io/worktree-integrator/)
 を参照してください。
