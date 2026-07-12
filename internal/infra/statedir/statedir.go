@@ -17,7 +17,6 @@ package statedir
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,9 +33,6 @@ var ErrBusy = store.ErrBusy
 
 // repoLockTimeout はリポジトリ操作ロックの取得を諦めるまでの待ち時間。
 const repoLockTimeout = 5 * time.Second
-
-// repoLockRetryInterval は、ノンブロッキング取得の失敗後に再試行するまでの間隔。
-const repoLockRetryInterval = 25 * time.Millisecond
 
 // Root は状態ディレクトリのルート。Default または At でのみ構築される。
 type Root struct {
@@ -90,33 +86,15 @@ func (r Root) WithRepoLock(ctx context.Context, repo string, fn func() error) er
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create lock directory %s: %w", filepath.Dir(path), err)
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	// ロック取得の再試行意味論（LOCK_NB + 小刻みな再試行 → ctx キャンセル →
+	// タイムアウトで ErrBusy）は状態ファイルロックと同一であり、infra/store の共通
+	// ヘルパーへ委譲する。ロック対象は専用のロックファイルであり、内容の書き込みも
+	// truncate も行わないため、flock の inode への作用でロックの同一性が保たれる。
+	file, err := store.AcquireLock(ctx, path, syscall.LOCK_EX, repoLockTimeout)
 	if err != nil {
-		return fmt.Errorf("open lock file %s: %w", path, err)
+		return err
 	}
 	defer file.Close()
-
-	// ロック対象は専用のロックファイルであり、内容の書き込みも truncate も行わない。
-	// flock は inode に対して作用するため、ロックファイル自体を置き換えない限り
-	// ロックの同一性は保たれる（infra/store と同じ前提）。
-	deadline := time.Now().Add(repoLockTimeout)
-	for {
-		err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-		if err == nil {
-			break
-		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) {
-			return fmt.Errorf("acquire lock on %s: %w", path, err)
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("%w（リポジトリ %q の操作ロックを %v 待っても取得できませんでした）", ErrBusy, repo, repoLockTimeout)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(repoLockRetryInterval):
-		}
-	}
 	defer func() { _ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN) }()
 
 	return fn()

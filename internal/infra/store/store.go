@@ -140,12 +140,26 @@ func (f *File[T]) acquire(ctx context.Context, how int) (*os.File, error) {
 	if err := f.ensureDir(); err != nil {
 		return nil, err
 	}
-	path := f.lockPath()
+	return AcquireLock(ctx, f.lockPath(), how, f.timeout())
+}
+
+// AcquireLock はロックファイル path を O_CREATE で開き、how（LOCK_EX / LOCK_SH）の
+// アドバイザリロックを LOCK_NB + 小刻みな再試行で取得して、ロック済みのファイルを返す。
+// EWOULDBLOCK なら deadline（timeout）まで lockRetryInterval 間隔で再試行し、ctx の
+// キャンセルには ctx.Err() で、タイムアウトには ErrBusy を包んで応答する。取得した
+// ファイルの Flock(LOCK_UN) と Close は呼び出し側の責務である。エラー時はファイルを
+// クローズしてから返す。
+//
+// 親ディレクトリの作成と呼び出し前の ctx チェックは、エラーメッセージの文脈が
+// 呼び出し側（状態ファイルロックとリポジトリ操作ロック）で異なるため、呼び出し側が
+// 行う。状態ファイルロック（File.acquire）と repo 操作ロック（statedir）はどちらも
+// この一つの再試行意味論を共有する。
+func AcquireLock(ctx context.Context, path string, how int, timeout time.Duration) (*os.File, error) {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("open lock file %s: %w", path, err)
 	}
-	deadline := time.Now().Add(f.timeout())
+	deadline := time.Now().Add(timeout)
 	for {
 		err := syscall.Flock(int(file.Fd()), how|syscall.LOCK_NB)
 		if err == nil {
@@ -157,7 +171,7 @@ func (f *File[T]) acquire(ctx context.Context, how int) (*os.File, error) {
 		}
 		if time.Now().After(deadline) {
 			_ = file.Close()
-			return nil, fmt.Errorf("%w（%s のロックを %v 待っても取得できませんでした）", ErrBusy, path, f.timeout())
+			return nil, fmt.Errorf("%w（%s のロックを %v 待っても取得できませんでした）", ErrBusy, path, timeout)
 		}
 		select {
 		case <-ctx.Done():
