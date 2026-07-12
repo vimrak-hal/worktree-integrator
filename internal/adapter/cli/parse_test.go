@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/vimrak-hal/worktree-integrator/internal/core/action"
 )
 
@@ -163,6 +165,12 @@ func TestInjectCreateTable(t *testing.T) {
 		"--repo": true, "--repos-dir": true, "--worktrees-dir": true,
 		"--remote": true, "--concurrency": true, "-j": true, "--base": true,
 	}
+	// known は knownSubcommands（cobra 登録からの導出）が返す集合を模したもの。
+	known := map[string]bool{
+		"create": true, "list": true, "enter": true, "remove": true, "doctor": true,
+		"repos": true, "server": true, "alias": true, "mcp": true, "ui": true,
+		"config": true, "help": true,
+	}
 	tests := []struct {
 		name    string
 		args    []string
@@ -189,7 +197,7 @@ func TestInjectCreateTable(t *testing.T) {
 	t.Cleanup(func() { delete(reservedSubcommand, "future-cmd") })
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := injectCreate(tt.args, vf)
+			got, err := injectCreate(tt.args, vf, known)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -197,6 +205,69 @@ func TestInjectCreateTable(t *testing.T) {
 				t.Fatalf("got %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// buildTestRoot は Parse と同じ addXxx 群でコマンドツリーを組み立てる。既知
+// サブコマンド集合が cobra 登録から導出されることを検証するためのもの。
+func buildTestRoot(result *Invocation) *cobra.Command {
+	root := &cobra.Command{Use: "worktree-integrator"}
+	root.CompletionOptions.DisableDefaultCmd = true
+	addCreate(root, result)
+	addTree(root, result)
+	addServer(root, result)
+	addAlias(root, result)
+	addMCP(root, result)
+	addUI(root, result)
+	addConfig(root, result)
+	return root
+}
+
+// knownSubcommands は cobra に登録された全コマンドの名前と別名を漏れなく拾う
+// （手書きマップとの同期漏れが起きないことの担保）。
+func TestKnownSubcommandsDerivedFromCobra(t *testing.T) {
+	var result Invocation
+	root := buildTestRoot(&result)
+	known := knownSubcommands(root)
+	for _, c := range root.Commands() {
+		if !known[c.Name()] {
+			t.Errorf("registered command %q missing from the known set", c.Name())
+		}
+		for _, a := range c.Aliases {
+			if !known[a] {
+				t.Errorf("registered alias %q (of %q) missing from the known set", a, c.Name())
+			}
+		}
+	}
+	// help は cobra 組込みのため明示追加される（Execute 前は Commands() に現れない）。
+	if !known["help"] {
+		t.Error("built-in `help` should be in the known set")
+	}
+}
+
+// ルート直下コマンドに別名を付けても injectCreate は誤発火しない（既知集合が
+// cobra 登録の別名からも導出されるため、かつての「別名禁止」地雷が解消された
+// ことの回帰テスト）。
+func TestRootLevelAliasDoesNotMisfireInjectCreate(t *testing.T) {
+	root := &cobra.Command{Use: "worktree-integrator"}
+	root.CompletionOptions.DisableDefaultCmd = true
+	root.AddCommand(&cobra.Command{
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Args:    cobra.NoArgs,
+		RunE:    func(*cobra.Command, []string) error { return nil },
+	})
+	known := knownSubcommands(root)
+	if !known["ls"] {
+		t.Fatal("root-level alias `ls` should be in the derived known set")
+	}
+	// 別名トークンは create 名に化けず、そのまま素通しされる。
+	got, err := injectCreate([]string{"ls"}, map[string]bool{}, known)
+	if err != nil {
+		t.Fatalf("injectCreate(ls) = %v", err)
+	}
+	if !reflect.DeepEqual(got, []string{"ls"}) {
+		t.Fatalf("root-level alias `ls` should pass through untouched, got %v", got)
 	}
 }
 

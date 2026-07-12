@@ -166,7 +166,7 @@ func Parse(args []string) (Invocation, error) {
 	addUI(root, &result)
 	addConfig(root, &result)
 
-	injected, err := injectCreate(args, valueFlags(createCmd))
+	injected, err := injectCreate(args, valueFlags(createCmd), knownSubcommands(root))
 	if err != nil {
 		return nil, err
 	}
@@ -230,9 +230,10 @@ func addCreate(root *cobra.Command, result *Invocation) *cobra.Command {
 // addTree は worktree ライフサイクルの残り半分（list / enter / remove / doctor）と
 // repos を登録する。
 func addTree(root *cobra.Command, result *Invocation) {
-	// 注意: ルート直下のコマンドに別名（ls / rm など）を付けてはならない。素の
-	// `<name>` 形式の解析（injectCreate）は knownSubcommand の集合だけを見るため、
-	// ここに現れない別名トークンは worktree 名として create に化けてしまう。
+	// ルート直下のコマンドに別名（ls / rm など）を付けても安全である。素の `<name>`
+	// 形式の解析（injectCreate）が参照する既知サブコマンド集合は cobra 登録の名前と
+	// 別名から導出される（knownSubcommands）ため、別名トークンも worktree 名として
+	// create に化けることはない。
 	listCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List every worktree with its alias, member repositories and running servers",
@@ -522,21 +523,30 @@ func scopeFromArgs(args []string) (action.WorktreeScope, error) {
 	return action.OneWorktree{Name: name}, nil
 }
 
-// knownSubcommand は、（素の worktree 名ではなく）実際のサブコマンドである先頭トークンの
-// 集合。Cobra のデフォルトの `completion` コマンドは無効化されているため（Parse を参照）、
-// `completion` は他のトークンと同様に worktree 名として扱われる。サブコマンド名と同名の
-// worktree は `create <name>` の明示で作成できる。
-var knownSubcommand = map[string]bool{
-	"create": true, "list": true, "enter": true, "remove": true, "doctor": true,
-	"repos": true, "server": true, "alias": true, "mcp": true, "ui": true,
-	"config": true, "help": true,
+// knownSubcommands は root に登録済みの全コマンドの名前と別名から、（素の worktree
+// 名ではなく）実際のサブコマンドである先頭トークンの集合を導出する。cobra への登録を
+// 唯一の情報源とすることで、手書きマップとの同期漏れ（新コマンドが素の名前として
+// create に化ける）を構造的に防ぐ。"help" は cobra 組込みだが Execute 前は
+// root.Commands() に現れないため明示的に加える。Cobra のデフォルトの `completion`
+// コマンドは無効化されているため（Parse を参照）、`completion` は他のトークンと同様に
+// worktree 名として扱われる。サブコマンド名と同名の worktree は `create <name>` の
+// 明示で作成できる。
+func knownSubcommands(root *cobra.Command) map[string]bool {
+	m := map[string]bool{"help": true}
+	for _, c := range root.Commands() {
+		m[c.Name()] = true
+		for _, a := range c.Aliases {
+			m[a] = true
+		}
+	}
+	return m
 }
 
 // reservedSubcommand は、まだ実装されていないが将来のサブコマンドとして予約されている
 // 先頭トークンの集合。素の名前として黙って worktree を作ると、コマンドが実装された
 // 時点で同じ入力が別の動作に変わってしまうため、予約してエラーで案内する。現在は
-// すべて実装済み（knownSubcommand へ移動済み）で空である。将来サブコマンドを追加する
-// 際は、実装より先にここへ足すこと。
+// すべて実装済みで空である（実装済みコマンドは cobra 登録から自動的に既知集合へ入る）。
+// 将来サブコマンドを追加する際は、実装より先にここへ足すこと。
 var reservedSubcommand = map[string]bool{}
 
 // valueFlags は create コマンドのフラグ定義から、（引数を分離する形式で）後続の
@@ -564,7 +574,7 @@ func valueFlags(create *cobra.Command) map[string]bool {
 // "create" を付加する（素の形式ではすべてのフラグが create のローカルフラグであり、
 // cobra がルートで解釈できないため、途中挿入ではなく先頭付加とする）。
 // `--` 以降は位置引数として解釈しない。
-func injectCreate(args []string, valueFlag map[string]bool) ([]string, error) {
+func injectCreate(args []string, valueFlag, known map[string]bool) ([]string, error) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if a == "--" {
@@ -577,7 +587,7 @@ func injectCreate(args []string, valueFlag map[string]bool) ([]string, error) {
 			continue
 		}
 		// 最初の位置引数トークン。
-		if knownSubcommand[a] {
+		if known[a] {
 			return args, nil
 		}
 		if reservedSubcommand[a] {
