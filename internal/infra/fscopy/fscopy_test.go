@@ -1,6 +1,8 @@
 package fscopy
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -48,7 +50,7 @@ func TestCopiesFilesAndDirectories(t *testing.T) {
 	}
 	mustWrite(t, filepath.Join(src, "data", "default-user", "secrets.json"), "{}")
 
-	report := CopyInto(src, dst, []string{".env", "data"}, nil)
+	report := CopyInto(context.Background(), src, dst, []string{".env", "data"}, nil)
 	if len(report.Failures) != 0 || len(report.Rejected) != 0 {
 		t.Fatalf("report = %+v", report)
 	}
@@ -63,6 +65,31 @@ func TestCopiesFilesAndDirectories(t *testing.T) {
 	}
 }
 
+// TestCanceledContextStopsCopy は、キャンセル済みの ctx を渡すとコピーに着手せず、
+// ctx.Err() が Failure として記録されることを確認する（大きなツリーのコピー中でも
+// Ctrl-C を効かせるための穴埋め）。
+func TestCanceledContextStopsCopy(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	mustWrite(t, filepath.Join(src, ".env"), "SECRET=1\n")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	report := CopyInto(ctx, src, dst, []string{".env"}, nil)
+	if len(report.Copied) != 0 {
+		t.Fatalf("copied = %v, want none", report.Copied)
+	}
+	if len(report.Failures) != 1 {
+		t.Fatalf("failures = %+v, want one canceled failure", report.Failures)
+	}
+	if !errors.Is(report.Failures[0].Err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", report.Failures[0].Err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, ".env")); err == nil {
+		t.Fatal("canceled copy must not write the destination")
+	}
+}
+
 func TestNestedFileTargetParentCreated(t *testing.T) {
 	src, dst := t.TempDir(), t.TempDir()
 	if err := os.MkdirAll(filepath.Join(src, "backend"), 0o755); err != nil {
@@ -70,7 +97,7 @@ func TestNestedFileTargetParentCreated(t *testing.T) {
 	}
 	mustWrite(t, filepath.Join(src, "backend", ".env"), "X=1")
 
-	report := CopyInto(src, dst, []string{"backend/.env"}, nil)
+	report := CopyInto(context.Background(), src, dst, []string{"backend/.env"}, nil)
 	if !reflect.DeepEqual(report.Copied, []string{"backend/.env"}) {
 		t.Fatalf("copied = %v", report.Copied)
 	}
@@ -81,7 +108,7 @@ func TestNestedFileTargetParentCreated(t *testing.T) {
 
 func TestMissingSourcesSkippedSilently(t *testing.T) {
 	src, dst := t.TempDir(), t.TempDir()
-	report := CopyInto(src, dst, []string{".env"}, nil)
+	report := CopyInto(context.Background(), src, dst, []string{".env"}, nil)
 	if len(report.Copied) != 0 || len(report.Failures) != 0 || len(report.Rejected) != 0 {
 		t.Fatalf("report = %+v", report)
 	}
@@ -90,7 +117,7 @@ func TestMissingSourcesSkippedSilently(t *testing.T) {
 func TestUnsafePathsRejected(t *testing.T) {
 	src, dst := t.TempDir(), t.TempDir()
 	mustWrite(t, filepath.Join(src, "ok"), "x")
-	report := CopyInto(src, dst, []string{
+	report := CopyInto(context.Background(), src, dst, []string{
 		"/etc/passwd", "../escape", ".git/config", ".", "./", "",
 	}, nil)
 	if len(report.Rejected) != 6 {
@@ -113,7 +140,7 @@ func TestGitComponentRejectedCaseAndPosition(t *testing.T) {
 		"sub/.git/config",
 		"sub/.GIT/config",
 	}
-	report := CopyInto(src, dst, unsafe, nil)
+	report := CopyInto(context.Background(), src, dst, unsafe, nil)
 	if len(report.Rejected) != len(unsafe) {
 		t.Fatalf("rejected = %v, want all %d rejected", report.Rejected, len(unsafe))
 	}
@@ -147,7 +174,7 @@ func TestRecursionSkipsNestedGitDirectories(t *testing.T) {
 	mustWrite(t, filepath.Join(src, "vendor", "pkg", ".GIT", "config"), "x")
 	mustWrite(t, filepath.Join(src, "vendor", "pkg", "main.go"), "package pkg")
 
-	report := CopyInto(src, dst, []string{"vendor"}, nil)
+	report := CopyInto(context.Background(), src, dst, []string{"vendor"}, nil)
 	if len(report.Failures) != 0 {
 		t.Fatalf("failures = %+v", report.Failures)
 	}
@@ -169,7 +196,7 @@ func TestSymlinksRecreatedNotFollowed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report := CopyInto(src, dst, []string{"dir"}, nil)
+	report := CopyInto(context.Background(), src, dst, []string{"dir"}, nil)
 	if len(report.Failures) != 0 {
 		t.Fatalf("failures = %+v", report.Failures)
 	}
@@ -192,7 +219,7 @@ func TestRefusesWriteThroughSymlinkedDstAncestor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report := CopyInto(src, dst, []string{"data/conf"}, nil)
+	report := CopyInto(context.Background(), src, dst, []string{"data/conf"}, nil)
 	if len(report.Copied) != 0 || len(report.Failures) != 1 {
 		t.Fatalf("report = %+v", report)
 	}
@@ -208,7 +235,7 @@ func TestRefusesReadThroughSymlinkedSrcAncestor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report := CopyInto(src, dst, []string{"link/secret"}, nil)
+	report := CopyInto(context.Background(), src, dst, []string{"link/secret"}, nil)
 	if len(report.Copied) != 0 || len(report.Failures) != 1 {
 		t.Fatalf("report = %+v", report)
 	}
@@ -225,7 +252,7 @@ func TestExcludesAppliedRecursively(t *testing.T) {
 	mustWrite(t, filepath.Join(src, "data", "keep.txt"), "keep")
 	mustWrite(t, filepath.Join(src, "data", "node_modules", "pkg", "huge.bin"), "x")
 
-	report := CopyInto(src, dst, []string{"data"}, []string{"node_modules"})
+	report := CopyInto(context.Background(), src, dst, []string{"data"}, []string{"node_modules"})
 	if len(report.Failures) != 0 {
 		t.Fatalf("failures = %+v", report.Failures)
 	}
@@ -280,7 +307,7 @@ func TestTopLevelExcludeSkipsEntirePath(t *testing.T) {
 	mustWrite(t, filepath.Join(src, "node_modules", "pkg", "x.js"), "x")
 
 	// トップレベルのパスそのものが除外にマッチする場合は丸ごとスキップされる。
-	report := CopyInto(src, dst, []string{"node_modules"}, []string{"node_modules"})
+	report := CopyInto(context.Background(), src, dst, []string{"node_modules"}, []string{"node_modules"})
 	if len(report.Copied) != 0 || len(report.Failures) != 0 || len(report.Rejected) != 0 {
 		t.Fatalf("report = %+v", report)
 	}
@@ -307,7 +334,7 @@ func TestDirOnlyExcludeAppliedRecursively(t *testing.T) {
 	mustWrite(t, filepath.Join(src, "data", "cache", "big.bin"), "x")
 	mustWrite(t, filepath.Join(src, "data", "cache.txt"), "keep")
 
-	report := CopyInto(src, dst, []string{"data"}, []string{"cache/"})
+	report := CopyInto(context.Background(), src, dst, []string{"data"}, []string{"cache/"})
 	if len(report.Failures) != 0 {
 		t.Fatalf("failures = %+v", report.Failures)
 	}
@@ -329,7 +356,7 @@ func TestDoublestarGlobExcludeAppliedRecursively(t *testing.T) {
 	mustWrite(t, filepath.Join(src, "logs", "sub", "debug.log"), "x")
 	mustWrite(t, filepath.Join(src, "logs", "keep.txt"), "keep")
 
-	report := CopyInto(src, dst, []string{"logs"}, []string{"**/*.log"})
+	report := CopyInto(context.Background(), src, dst, []string{"logs"}, []string{"**/*.log"})
 	if len(report.Failures) != 0 {
 		t.Fatalf("failures = %+v", report.Failures)
 	}
@@ -344,7 +371,7 @@ func TestDoublestarGlobExcludeAppliedRecursively(t *testing.T) {
 func TestMissingIntermediateSourceDirSkipped(t *testing.T) {
 	// ソースの中間ディレクトリが存在しない（リーフ以前で欠落）場合は黙ってスキップ。
 	src, dst := t.TempDir(), t.TempDir()
-	report := CopyInto(src, dst, []string{"backend/config/.env"}, nil)
+	report := CopyInto(context.Background(), src, dst, []string{"backend/config/.env"}, nil)
 	if len(report.Copied) != 0 || len(report.Failures) != 0 || len(report.Rejected) != 0 {
 		t.Fatalf("report = %+v", report)
 	}
@@ -355,7 +382,7 @@ func TestSourceIntermediateNotADirectory(t *testing.T) {
 	src, dst := t.TempDir(), t.TempDir()
 	mustWrite(t, filepath.Join(src, "backend"), "iam a file")
 
-	report := CopyInto(src, dst, []string{"backend/.env"}, nil)
+	report := CopyInto(context.Background(), src, dst, []string{"backend/.env"}, nil)
 	if len(report.Copied) != 0 || len(report.Failures) != 1 {
 		t.Fatalf("report = %+v", report)
 	}
@@ -373,7 +400,7 @@ func TestDestIntermediateNotADirectory(t *testing.T) {
 	mustWrite(t, filepath.Join(src, "backend", ".env"), "X=1")
 	mustWrite(t, filepath.Join(dst, "backend"), "blocking file")
 
-	report := CopyInto(src, dst, []string{"backend/.env"}, nil)
+	report := CopyInto(context.Background(), src, dst, []string{"backend/.env"}, nil)
 	if len(report.Copied) != 0 || len(report.Failures) != 1 {
 		t.Fatalf("report = %+v", report)
 	}
@@ -388,7 +415,7 @@ func TestOverwritesExistingFile(t *testing.T) {
 	mustWrite(t, filepath.Join(src, ".env"), "NEW=1\n")
 	mustWrite(t, filepath.Join(dst, ".env"), "OLD=stale\n")
 
-	report := CopyInto(src, dst, []string{".env"}, nil)
+	report := CopyInto(context.Background(), src, dst, []string{".env"}, nil)
 	if !reflect.DeepEqual(report.Copied, []string{".env"}) {
 		t.Fatalf("copied = %v", report.Copied)
 	}
@@ -406,7 +433,7 @@ func TestOverwritesExistingSymlinkWithFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report := CopyInto(src, dst, []string{".env"}, nil)
+	report := CopyInto(context.Background(), src, dst, []string{".env"}, nil)
 	if !reflect.DeepEqual(report.Copied, []string{".env"}) {
 		t.Fatalf("copied = %v", report.Copied)
 	}
@@ -435,7 +462,7 @@ func TestRecreatesSymlinkOverExistingFile(t *testing.T) {
 	}
 	mustWrite(t, filepath.Join(dst, "link"), "stale regular file")
 
-	report := CopyInto(src, dst, []string{"link"}, nil)
+	report := CopyInto(context.Background(), src, dst, []string{"link"}, nil)
 	if !reflect.DeepEqual(report.Copied, []string{"link"}) {
 		t.Fatalf("copied = %v", report.Copied)
 	}
@@ -463,7 +490,7 @@ func TestRefusesToCopyDirIntoSymlinkedDst(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report := CopyInto(src, dst, []string{"data"}, nil)
+	report := CopyInto(context.Background(), src, dst, []string{"data"}, nil)
 	if len(report.Copied) != 0 || len(report.Failures) != 1 {
 		t.Fatalf("report = %+v", report)
 	}
@@ -484,7 +511,7 @@ func TestDirSourceOverExistingFileDestination(t *testing.T) {
 	mustWrite(t, filepath.Join(src, "data", "f"), "x")
 	mustWrite(t, filepath.Join(dst, "data"), "i am a file")
 
-	report := CopyInto(src, dst, []string{"data"}, nil)
+	report := CopyInto(context.Background(), src, dst, []string{"data"}, nil)
 	if len(report.Copied) != 0 || len(report.Failures) != 1 {
 		t.Fatalf("report = %+v", report)
 	}
@@ -505,7 +532,7 @@ func TestReusesExistingDestinationDirectory(t *testing.T) {
 	}
 	mustWrite(t, filepath.Join(dst, "data", "existing.txt"), "kept")
 
-	report := CopyInto(src, dst, []string{"data"}, nil)
+	report := CopyInto(context.Background(), src, dst, []string{"data"}, nil)
 	if !reflect.DeepEqual(report.Copied, []string{"data"}) {
 		t.Fatalf("copied = %v", report.Copied)
 	}
@@ -536,7 +563,7 @@ func TestIntermediateDirsRemainAfterLeafFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report := CopyInto(src, dst, []string{"a/b/leaf"}, nil)
+	report := CopyInto(context.Background(), src, dst, []string{"a/b/leaf"}, nil)
 	if len(report.Failures) != 1 {
 		t.Fatalf("report = %+v", report)
 	}

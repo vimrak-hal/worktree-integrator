@@ -22,6 +22,7 @@
 package fscopy
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -69,9 +70,18 @@ func (r *Report) Merge(other Report) {
 // し、ディレクトリは再帰的にコピーし、シンボリックリンクはそのまま再作成する。
 // excludes は gitignore 互換のパターン（isExcludedRel を参照）で、トップレベルと
 // 再帰の両方に適用される。
-func CopyInto(srcRoot, dstRoot string, paths, excludes []string) Report {
+//
+// ctx がキャンセルされると（パス単位の処理開始時とディレクトリ再帰の各降下時に
+// 確認する）、以降のコピーを打ち切り、ctx.Err() を Failure として記録して返す。
+func CopyInto(ctx context.Context, srcRoot, dstRoot string, paths, excludes []string) Report {
 	var report Report
 	for _, rel := range paths {
+		// パス単位の処理を始める前にキャンセルへ応答する。大きなツリーの
+		// コピーでも Ctrl-C を効かせるための穴埋め（copyTree でも降下ごとに確認する）。
+		if err := ctx.Err(); err != nil {
+			report.Failures = append(report.Failures, Failure{Path: rel, Err: err})
+			break
+		}
 		if !isSafeRelative(rel) {
 			report.Rejected = append(report.Rejected, rel)
 			continue
@@ -80,7 +90,7 @@ func CopyInto(srcRoot, dstRoot string, paths, excludes []string) Report {
 		if isExcludedTop(srcRoot, rel, excludes) {
 			continue
 		}
-		copied, err := copyOne(srcRoot, dstRoot, rel, excludes)
+		copied, err := copyOne(ctx, srcRoot, dstRoot, rel, excludes)
 		switch {
 		case err != nil:
 			report.Failures = append(report.Failures, Failure{Path: rel, Err: err})
@@ -145,7 +155,7 @@ func matchesExcludePattern(rel string, isDir bool, pattern string) bool {
 // ソースが存在しなかった場合は (false, nil)、エラーの場合は（拒否された
 // シンボリックリンクの辿りを含めて）エラーを返す。rel がディレクトリの場合、
 // excludes は再帰的に適用される。
-func copyOne(srcRoot, dstRoot, rel string, excludes []string) (bool, error) {
+func copyOne(ctx context.Context, srcRoot, dstRoot, rel string, excludes []string) (bool, error) {
 	src, err := descend(srcRoot, rel, false)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil // ソースの中間ディレクトリが存在しない — 黙ってスキップする
@@ -161,7 +171,7 @@ func copyOne(srcRoot, dstRoot, rel string, excludes []string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if err := copyTree(src, dst, rel, excludes); err != nil {
+	if err := copyTree(ctx, src, dst, rel, excludes); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -208,7 +218,13 @@ func descend(root, rel string, create bool) (string, error) {
 // copyTree は既に安全に解決された src リーフを dst へ再帰的にコピーする。rel は
 // コピールートからの相対パスである（すべての深さで excludes を適用するために使う）。
 // シンボリックリンクはそのまま再作成し、決して辿らない。
-func copyTree(src, dst, rel string, excludes []string) error {
+//
+// 降下（この関数の呼び出し）ごとに ctx.Err() を確認し、キャンセルされていれば
+// それ以上潜らず ctx.Err() を返す。大きなツリーの再帰コピー中も Ctrl-C を効かせる。
+func copyTree(ctx context.Context, src, dst, rel string, excludes []string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	info, err := os.Lstat(src)
 	if err != nil {
 		return err
@@ -253,7 +269,7 @@ func copyTree(src, dst, rel string, excludes []string) error {
 			if isExcludedRel(childRel, entry.IsDir(), excludes) {
 				continue
 			}
-			if err := copyTree(filepath.Join(src, name), filepath.Join(dst, name), childRel, excludes); err != nil {
+			if err := copyTree(ctx, filepath.Join(src, name), filepath.Join(dst, name), childRel, excludes); err != nil {
 				return err
 			}
 		}

@@ -153,16 +153,18 @@ func Run(ctx context.Context, deps Deps, cfg action.Create) (*Result, error) {
 
 	// post-create ステップ: 設定された追加ファイル（例: gitignore された .env）を
 	// 新しいチェックアウトへコピーする。コピーの部分失敗は Created を覆さず、
-	// RepoOutcome.Copy レポートで区別される。キャンセル済みなら着手しない。
+	// RepoOutcome.Copy レポートで区別される。リポジトリごとにキャンセルを確認し、
+	// キャンセル済みなら以降のコピーには着手しない（fscopy もツリー走査中に応答する）。
 	copies := map[string]*fscopy.Report{}
-	if ctx.Err() == nil {
-		for i, o := range outcomes {
-			if o.Status != worktree.StatusCreated {
-				continue
-			}
-			req := reqs[i]
-			copies[o.Repo] = copyExtras(ctx, req.RepoPath, req.Target, o.Repo, cfg.CopyPlanFor(o.Repo), reporter)
+	for i, o := range outcomes {
+		if o.Status != worktree.StatusCreated {
+			continue
 		}
+		if ctx.Err() != nil {
+			break
+		}
+		req := reqs[i]
+		copies[o.Repo] = copyExtras(ctx, req.RepoPath, req.Target, o.Repo, cfg.CopyPlanFor(o.Repo), reporter)
 	}
 	res.Repos = repoOutcomes(outcomes, copies)
 	for _, r := range res.Repos {

@@ -28,7 +28,7 @@ func copyExtras(ctx context.Context, repoPath, target, repoName string, plan con
 
 	// 段階 1: 明示的なパス（gitignored の除外指定の対象にはならない）。
 	if len(plan.Paths) > 0 {
-		report.Merge(fscopy.CopyInto(repoPath, target, plan.Paths, nil))
+		report.Merge(fscopy.CopyInto(ctx, repoPath, target, plan.Paths, nil))
 	}
 
 	// 段階 2: gitignore された全エントリから、既に処理した明示的なパスを差し引いたもの。
@@ -43,7 +43,7 @@ func copyExtras(ctx context.Context, repoPath, target, repoName string, plan con
 					selected = append(selected, p)
 				}
 			}
-			report.Merge(fscopy.CopyInto(repoPath, target, selected, plan.Exclude))
+			report.Merge(fscopy.CopyInto(ctx, repoPath, target, selected, plan.Exclude))
 		}
 	}
 
