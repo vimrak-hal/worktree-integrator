@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
 	coreserver "github.com/vimrak-hal/worktree-integrator/internal/core/server"
@@ -85,7 +84,7 @@ func Logs(ctx context.Context, d Deps, cmd action.ServerCommand, k action.LogsKi
 					continue
 				}
 				path = generation(path)
-				if !pathExists(path) {
+				if !coreserver.PathExists(path) {
 					continue
 				}
 				res.Logs = append(res.Logs, readEntry(tg.Repo, serverName, path, k.Lines))
@@ -104,7 +103,7 @@ func Logs(ctx context.Context, d Deps, cmd action.ServerCommand, k action.LogsKi
 // 経路。全読みを毎ティック繰り返さない）。
 func readEntry(repo, server, path string, lines int) LogEntry {
 	entry := LogEntry{Repo: repo, Server: server, Path: path}
-	if !pathExists(path) {
+	if !coreserver.PathExists(path) {
 		entry.Missing = true
 		return entry
 	}
@@ -116,23 +115,6 @@ func readEntry(repo, server, path string, lines int) LogEntry {
 		entry.Error = err.Error()
 		return entry
 	}
-	entry.Lines = tailLines(data, lines)
+	entry.Lines = coreserver.TailLines(data, lines)
 	return entry
-}
-
-// tailLines は data を "\n" で分割した末尾 n 行を返す。末尾の改行は無視され、
-// 余計な空の最終行を生じさせない。n が 0 以下なら何も返さない。
-func tailLines(data []byte, n int) []string {
-	if n <= 0 {
-		return nil
-	}
-	text := strings.TrimRight(string(data), "\n")
-	if text == "" {
-		return nil
-	}
-	lines := strings.Split(text, "\n")
-	if start := len(lines) - n; start > 0 {
-		lines = lines[start:]
-	}
-	return lines
 }

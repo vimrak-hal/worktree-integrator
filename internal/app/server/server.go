@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"os"
 	"slices"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
@@ -169,12 +168,6 @@ func saveRuntime(ctx context.Context, store *coreserver.StateStore, repo, server
 		state.Repo(repo).Servers[server] = runtime
 		return true, nil
 	})
-}
-
-// pathExists は path が存在するかどうかを返す（シンボリックリンクをたどる）。
-func pathExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 // failedCountError は失敗件数を伝えるワークフローの最終エラーを構築する。

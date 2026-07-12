@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -144,6 +145,14 @@ type StateStore struct {
 	// パスとともに呼ばれる。表示層が警告（「稼働中のサーバーは手動で停止してください」）
 	// を出すための通知であり、nil なら何もしない。
 	OnLegacy func(bakPath string)
+	// migrateOnce / migrateErr は、レガシー移行の検査をこのストアインスタンスあたり
+	// 高々一度に絞る。移行はディスク上のファイルを一度退避すれば意味を持ち終えるため、
+	// Exclusive / Update / View が毎回検査を繰り返す必要はない。最初の検査の結果
+	//（成功なら nil）を保持し、以降の全経路で再利用する。ストアはワークフロー単位で
+	// 生成される（app 層が呼び出しごとに NewStateStore する）ため、保持したエラーが
+	// 別コマンドへ波及することはない。
+	migrateOnce sync.Once
+	migrateErr  error
 }
 
 // NewStateStore は root を状態ルートとする状態ストアを返す。呼び出し側（app 層）が
@@ -169,35 +178,50 @@ type legacyProbe struct {
 	Version uint32 `toml:"version"`
 }
 
+// ensureMigrated はレガシー移行の検査を、このストアインスタンスあたり高々一度だけ
+// 実行する。最初の呼び出しの結果（成功なら nil、失敗ならそのエラー）を保持し、
+// 以降の Exclusive / Update / View はロックも読み取りも取らずにそれを再利用する。
+func (s *StateStore) ensureMigrated(ctx context.Context) error {
+	s.migrateOnce.Do(func() {
+		s.migrateErr = s.migrateLegacy(ctx)
+	})
+	return s.migrateErr
+}
+
 // migrateLegacy は状態ファイルが旧形式（version が StateVersion 未満）であれば
 // <path>.bak へ退避する。マイグレーション機構は作らない（設計判断）: 退避後は
 // 新規の空状態から始まり、旧ファイルに記録されていた稼働中サーバーは手動での停止が
 // 必要になる（OnLegacy 経由で表示層が警告する）。
 //
-// 検査・退避は排他ロックの下で行い、並行するコマンドと競合しない。すべての
-// 公開エントリポイント（Exclusive / Update / View）が最初にこれを通るため、
-// 旧形式ファイルが State のデコードに達する経路は存在しない。
+// まず共有ロックの下で版だけを覗き、旧形式でない一般的な場合は排他ロックを取らずに
+// 読み取り専用で済ませる（読み取り専用の View が排他ロックを一瞬掴む問題を避ける）。
+// 旧形式を検出したときだけ排他ロックへ昇格し、再確認のうえ退避する。退避は排他ロックの
+// 下で行うため並行するコマンドと競合しない。すべての公開エントリポイント（Exclusive /
+// Update / View）が最初にこれ（を包む ensureMigrated）を通るため、旧形式ファイルが
+// State のデコードに達する経路は存在しない。
 func (s *StateStore) migrateLegacy(ctx context.Context) error {
+	// 共有ロックの下で版を覗く。旧形式でなければここで終える（読み取り専用のまま）。
+	shared, err := s.inner.Shared(ctx)
+	if err != nil {
+		return err
+	}
+	legacy, err := s.isLegacyFile()
+	// 排他ロックへ昇格する前に共有ロックを手放す（同一ロックファイルの共有と排他は
+	// 同一プロセス内でも競合するため、保持したままでは昇格できない）。
+	_ = shared.Close()
+	if err != nil || !legacy {
+		return err
+	}
+
+	// 旧形式を検出した場合のみ排他ロックへ昇格する。共有を手放してから排他を取る間に
+	// 別プロセスが退避している可能性があるため、排他の下でもう一度確認する。
 	session, err := s.inner.Exclusive(ctx)
 	if err != nil {
 		return err
 	}
 	defer session.Close()
-
-	data, err := os.ReadFile(s.inner.Path())
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("read state file %s: %w", s.inner.Path(), err)
-	}
-	var probe legacyProbe
-	// デコード不能なファイルはここでは触らず、後続の Load に本来のエラーを報告させる。
-	if _, err := toml.Decode(string(data), &probe); err != nil {
-		return nil
-	}
-	if probe.Version >= StateVersion {
-		return nil
+	if legacy, err := s.isLegacyFile(); err != nil || !legacy {
+		return err
 	}
 	bak := s.inner.Path() + ".bak"
 	if err := os.Rename(s.inner.Path(), bak); err != nil {
@@ -209,11 +233,30 @@ func (s *StateStore) migrateLegacy(ctx context.Context) error {
 	return nil
 }
 
+// isLegacyFile は状態ファイルの版だけを緩くデコードして読み、旧形式（StateVersion
+// 未満）かどうかを返す。ファイルが無い・デコードできない場合は「旧形式ではない」と
+// して扱う（デコード不能なファイルはここでは触らず、後続の Load に本来のエラーを
+// 報告させる）。呼び出し側がロック（共有または排他）を保持していることが前提。
+func (s *StateStore) isLegacyFile() (bool, error) {
+	data, err := os.ReadFile(s.inner.Path())
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read state file %s: %w", s.inner.Path(), err)
+	}
+	var probe legacyProbe
+	if _, err := toml.Decode(string(data), &probe); err != nil {
+		return false, nil
+	}
+	return probe.Version < StateVersion, nil
+}
+
 // Exclusive は排他ロックを取得し、読み書き可能なセッションを返す。ロックは短命に
 // 保つこと: ワークフロー全体の直列化は statedir.Root.WithRepoLock（repo 操作ロック）が
 // 担い、状態ファイルロックは Load / Save の間だけ保持する。
 func (s *StateStore) Exclusive(ctx context.Context) (*store.Session[State], error) {
-	if err := s.migrateLegacy(ctx); err != nil {
+	if err := s.ensureMigrated(ctx); err != nil {
 		return nil, err
 	}
 	return s.inner.Exclusive(ctx)
@@ -222,7 +265,7 @@ func (s *StateStore) Exclusive(ctx context.Context) (*store.Session[State], erro
 // Update は、排他ロックの下で読み込んだ状態に対して mutate を実行し、状態が dirty と
 // 報告された場合にのみ永続化する。
 func (s *StateStore) Update(ctx context.Context, mutate func(state *State) (dirty bool, err error)) error {
-	if err := s.migrateLegacy(ctx); err != nil {
+	if err := s.ensureMigrated(ctx); err != nil {
 		return err
 	}
 	return s.inner.Update(ctx, mutate)
@@ -233,7 +276,7 @@ func (s *StateStore) Update(ctx context.Context, mutate func(state *State) (dirt
 // ドキュメントは呼び出しごとに新しく読まれた専有のコピーであり、view の外へ持ち出して
 // も安全である（ただしそれを書き戻す場合は Update を使う）。
 func (s *StateStore) View(ctx context.Context, view func(state *State) error) error {
-	if err := s.migrateLegacy(ctx); err != nil {
+	if err := s.ensureMigrated(ctx); err != nil {
 		return err
 	}
 	return s.inner.View(ctx, view)

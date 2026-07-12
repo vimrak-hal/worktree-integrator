@@ -189,7 +189,7 @@ func SwitchServer(ctx context.Context, pc ProcessControl, runtime *Runtime, req 
 	// 初回判定は記録と現実の両方で行う: setup の記録があっても、その実行先の
 	// パスが消えていれば（worktree が削除・再作成されていれば）初回として扱う。
 	rec, recorded := runtime.Setup[worktree]
-	isFirst := !recorded || !pathExists(rec.Path)
+	isFirst := !recorded || !PathExists(rec.Path)
 
 	var events []Event
 	emit := func(e Event) { events = append(events, e) }
@@ -290,7 +290,7 @@ func watchStartup(ctx context.Context, pc ProcessControl, id proc.Ident, logPath
 		if !pc.Alive(id) {
 			return &StartError{
 				Cause:   fmt.Errorf("server process (pid %d) exited immediately after start", id.Pid),
-				LogTail: logTail(logPath, logTailLines),
+				LogTail: ReadTail(logPath, logTailLines),
 			}
 		}
 		if time.Now().After(deadline) {
@@ -304,11 +304,20 @@ func watchStartup(ctx context.Context, pc ProcessControl, id proc.Ident, logPath
 	}
 }
 
-// logTail は path の末尾 n 行を返す。読めない場合（ログ未作成など）は nil。
-// 即死検出の報告専用の小さなヘルパーで、巨大なログを想定しない。
-func logTail(path string, n int) []string {
+// ReadTail は path の末尾 n 行を返す。読めない場合（ログ未作成など）は nil。
+// 即死検出の報告や logs ワークフローで使う小さなヘルパーで、巨大なログを想定しない。
+func ReadTail(path string, n int) []string {
 	data, err := os.ReadFile(path)
 	if err != nil {
+		return nil
+	}
+	return TailLines(data, n)
+}
+
+// TailLines は data を "\n" で分割した末尾 n 行を返す。末尾の改行は無視され、
+// 余計な空の最終行を生じさせない。n が 0 以下なら何も返さない。
+func TailLines(data []byte, n int) []string {
+	if n <= 0 {
 		return nil
 	}
 	text := strings.TrimRight(string(data), "\n")
@@ -322,9 +331,10 @@ func logTail(path string, n int) []string {
 	return lines
 }
 
-// pathExists は path が存在するかどうかを返す（シンボリックリンクをたどる）。
-// isFirst 判定が記録をファイルシステムの現実と突き合わせるために使う。
-func pathExists(path string) bool {
+// PathExists は path が存在するかどうかを返す（シンボリックリンクをたどる）。
+// isFirst 判定や logs ワークフローが、記録をファイルシステムの現実と突き合わせる
+// ために使う。
+func PathExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }

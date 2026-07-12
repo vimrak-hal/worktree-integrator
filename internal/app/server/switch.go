@@ -40,7 +40,7 @@ func Switch(ctx context.Context, d Deps, cmd action.ServerCommand, k action.Swit
 			continue
 		}
 		repoRoot := filepath.Join(run.Root, tg.Repo)
-		if !pathExists(repoRoot) {
+		if !coreserver.PathExists(repoRoot) {
 			if k.RequireWorktree {
 				res.tally()
 				return res, fmt.Errorf("worktree が見つかりません: %s", repoRoot)
