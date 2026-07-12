@@ -2,11 +2,9 @@ package tree
 
 import (
 	"context"
-	"fmt"
 	"maps"
 	"slices"
 
-	"github.com/vimrak-hal/worktree-integrator/internal/core/git/repo"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/inventory"
 	coreserver "github.com/vimrak-hal/worktree-integrator/internal/core/server"
 )
@@ -57,11 +55,7 @@ type ServerCell struct {
 // server status と同じく、消滅済みプロセスの稼働記録は Probe が自己修復する
 // （変更があれば永続化される）。
 func List(ctx context.Context, d Deps) (*ListResult, error) {
-	repos, err := repo.Discover(ctx, d.ReposDir)
-	if err != nil {
-		return nil, fmt.Errorf("リポジトリの探索に失敗しました（%s）: %w", d.ReposDir, err)
-	}
-	scanned, err := inventory.Scan(ctx, d.WorktreesDir, repos)
+	scanned, err := inventory.Scan(ctx, d.WorktreesDir)
 	if err != nil {
 		return nil, err
 	}

@@ -126,6 +126,27 @@ func TestListEmpty(t *testing.T) {
 	}
 }
 
+// list は worktree の列挙に repos_dir を必要としない。repos_dir が存在しなくても
+// 成功する（worktree の実体スキャンはソースリポジトリ側の探索に依存しない）。
+func TestListSucceedsWithoutReposDir(t *testing.T) {
+	srcDir := t.TempDir()
+	worktreesDir := t.TempDir()
+	repoA := testutil.CloneWithBranchNamed(t, srcDir, "main", "repo-a")
+	addWorktree(t, repoA, "feat-x", filepath.Join(worktreesDir, "feat-x", "repo-a"))
+
+	// repos_dir は実在しないパスを指す。
+	reposDir := filepath.Join(t.TempDir(), "does-not-exist")
+	d := newDeps(t, serverfake.New(), &config.File{}, reposDir, worktreesDir)
+
+	res, err := List(t.Context(), d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Worktrees) != 1 || res.Worktrees[0].Name != "feat-x" {
+		t.Fatalf("worktrees = %+v", res.Worktrees)
+	}
+}
+
 // wtenv の Root 導出（<worktrees_dir>/<name>）と List の Root 表示が一致する
 // （表示と実体のパスがずれないことの固定）。
 func TestListRootMatchesRunContext(t *testing.T) {

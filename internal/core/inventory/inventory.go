@@ -4,7 +4,10 @@
 // 永続的なマニフェストは持たない（設計判断: 真実源を増やさない）。ユーザーが
 // `rm -rf` で worktree を消しても、次のスキャンがそのまま現実を報告する。
 //
-// list / doctor / create（差分作成）/ remove がこのスキャンを共有する。
+// list（Scan）と remove（Members）がこのスキャンを共有する。doctor と create は
+// 別方式を採る: doctor は修復対象の名前を起点にルートの実在を検査し、create は
+// 作成予定のリポジトリを git.IsWorkTree で差分判定するため、いずれも
+// worktrees_dir 全体のスキャンを必要としない。
 package inventory
 
 import (
@@ -17,7 +20,6 @@ import (
 	"strings"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/core/git"
-	"github.com/vimrak-hal/worktree-integrator/internal/core/git/repo"
 )
 
 // maxDepth はネストした worktree 名（"feature/login" など）を探すための再帰の
@@ -72,12 +74,11 @@ type RepoEntry struct {
 // 無い worktreesDir 直下の空ディレクトリは、リポジトリ 0 件の worktree セットとして
 // 報告する（作成途中・削除残骸を list / doctor から観測できるようにする）。
 //
-// known は既知（repos_dir 配下）のリポジトリ一覧。現在の健全性検査は「gitdir の
-// 指す先が実在するか」までで、known との厳密な照合（既知リポジトリの
-// .git/worktrees を指しているか）は行わない — シグネチャとして受け取るのは、
-// 呼び出し側が常に探索済みの一覧を持っており、将来検査を厳密化する際に契約を
-// 変えないためである。
-func Scan(ctx context.Context, worktreesDir string, _ []repo.Repo) ([]Worktree, error) {
+// 健全性検査は「gitdir の指す先が実在するか」までで、repos_dir 配下の既知
+// リポジトリとの厳密な照合（既知リポジトリの .git/worktrees を指しているか）は
+// 行わない。worktree の列挙自体はソースリポジトリの探索に依存しないため、
+// worktreesDir 以外の引数は取らない。
+func Scan(ctx context.Context, worktreesDir string) ([]Worktree, error) {
 	entries, err := os.ReadDir(worktreesDir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil

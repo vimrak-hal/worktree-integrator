@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/core/git"
-	"github.com/vimrak-hal/worktree-integrator/internal/core/git/repo"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/testutil"
 )
 
@@ -30,8 +29,7 @@ func TestScanListsWorktreesWithMembers(t *testing.T) {
 	addWorktree(t, repoB, "feat-x-b", filepath.Join(worktreesDir, "feat-x", "repo-b"))
 	addWorktree(t, repoA, "fix-y", filepath.Join(worktreesDir, "fix-y", "repo-a"))
 
-	known := []repo.Repo{{Name: "repo-a", Path: repoA}, {Name: "repo-b", Path: repoB}}
-	got, err := Scan(t.Context(), worktreesDir, known)
+	got, err := Scan(t.Context(), worktreesDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +71,7 @@ func TestScanDetectsBrokenGitdir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := Scan(t.Context(), worktreesDir, []repo.Repo{{Name: "repo-a", Path: repoA}})
+	got, err := Scan(t.Context(), worktreesDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +95,7 @@ func TestScanReportsEmptyDirectoryAsEmptyWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := Scan(t.Context(), worktreesDir, nil)
+	got, err := Scan(t.Context(), worktreesDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +106,7 @@ func TestScanReportsEmptyDirectoryAsEmptyWorktree(t *testing.T) {
 
 // 不存在の worktrees_dir は空リストで正常（初回利用はエラーではない）。
 func TestScanMissingWorktreesDirIsEmpty(t *testing.T) {
-	got, err := Scan(t.Context(), filepath.Join(t.TempDir(), "does-not-exist"), nil)
+	got, err := Scan(t.Context(), filepath.Join(t.TempDir(), "does-not-exist"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +123,7 @@ func TestScanFindsNestedWorktreeNames(t *testing.T) {
 	repoA := testutil.CloneWithBranchNamed(t, reposDir, "main", "repo-a")
 	addWorktree(t, repoA, "feature/login", filepath.Join(worktreesDir, "feature", "login", "repo-a"))
 
-	got, err := Scan(t.Context(), worktreesDir, []repo.Repo{{Name: "repo-a", Path: repoA}})
+	got, err := Scan(t.Context(), worktreesDir)
 	if err != nil {
 		t.Fatal(err)
 	}
