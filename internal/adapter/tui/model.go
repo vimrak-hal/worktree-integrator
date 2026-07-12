@@ -99,12 +99,13 @@ func splitKey(key string) (wt, repo, server string, ok bool) {
 // model は TUI 全体の状態。Bubble Tea の Elm アーキテクチャに乗り、更新は
 // Update・描画は View に閉じる。
 type model struct {
-	ctx  context.Context
-	root statedir.Root
+	// ops は統合操作・読み取りの実行を担う継ぎ目（本番は appOps）。キー入力から発行される
+	// 操作と引数の結線はテストがフェイクを差し込んで検証する。ctx / root / fw はモデルの
+	// 生存期間を通じて不変なため、モデルには持たず ops（appOps）に閉じる。
+	ops runner
 	// cfg は直近に正常に読み込めた設定。MCP サーバーと同様に定期的に再読み込みし、
 	// 編集は TUI の再起動なしで反映される（読めない間は直近の正常値で動き続ける）。
 	cfg *config.File
-	fw  *forwarder
 
 	// keys は全キーバインド、help はヘルプ行の描画器。キー処理は keys と
 	// kb.Matches で照合し、ヘルプ行は contextBindings を help が描く。
@@ -208,10 +209,8 @@ func newModel(ctx context.Context, cfg *config.File, root statedir.Root, fw *for
 	sp := spinner.New(spinner.WithSpinner(spinner.MiniDot))
 	sp.Style = lipgloss.NewStyle().Foreground(colorAccent)
 	return &model{
-		ctx:       ctx,
-		root:      root,
+		ops:       appOps{ctx: ctx, root: root, fw: fw},
 		cfg:       cfg,
-		fw:        fw,
 		keys:      newKeyMap(),
 		help:      newHelp(),
 		follow:    true,

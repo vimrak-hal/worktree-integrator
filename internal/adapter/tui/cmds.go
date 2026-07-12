@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -144,207 +145,270 @@ func serverCommand(cfg *config.File) (action.ServerCommand, error) {
 	return action.NewServerCommand(action.Overrides{}, cfg, os.Getenv, os.UserHomeDir, nil)
 }
 
-// resolveCmd は設定を読み直し、全体のサーバー状態と、選択中サーバーノードのログパス
-// （Lines: 0 = パス解決のみ）を取り直すコマンドを返す。この定期的な再解決が「表示の
-// 正」であり、MCP のエージェントや別の CLI が switch してもログ表示は自動で新しい
-// 対象へ追従する。
-func (m *model) resolveCmd() tea.Cmd {
-	// 発行のたびに世代を進めて捕捉する。Update は単一 goroutine で走るためここでの
-	// インクリメントは競合しない。以降の全戻り値（エラー含む）にこの seq を載せる。
-	m.resolveSeq++
-	seq := m.resolveSeq
-	ctx, root, fw := m.ctx, m.root, m.fw
-	lastCfg, prev, curKey := m.cfg, m.prev, m.curKey
-	return func() tea.Msg {
-		warn := ""
-		cfg, err := config.Load()
-		if err != nil {
-			// 編集途中の不正な設定で TUI を落とさない。直近の正常値で動き続ける。
-			cfg, warn = lastCfg, "設定の再読み込みに失敗（直近の設定で継続）: "+err.Error()
-		}
-		cmd, err := serverCommand(cfg)
-		if err != nil {
-			return resolvedMsg{seq: seq, err: err}
-		}
-		a := buildApp(cfg, root, fw)
-		status, err := a.ServerStatus(ctx, cmd)
-		if err != nil {
-			return resolvedMsg{seq: seq, err: err}
-		}
-		msg := resolvedMsg{seq: seq, cfg: cfg, status: status, warn: warn, selKey: curKey}
-		if curKey == "" {
-			return msg
-		}
-		wt, repo, srv, ok := splitKey(curKey)
-		if !ok {
-			// key が壊れている場合はステータスのみを返す（パスは触らない）。
-			return msg
-		}
-		name, err := action.ParseName(wt)
-		if err != nil {
-			return resolvedMsg{seq: seq, err: err}
-		}
-		logs, err := a.ServerLogs(ctx, cmd, action.LogsKind{Scope: action.OneWorktree{Name: name}, Lines: 0, Prev: prev})
-		if err != nil {
-			return resolvedMsg{seq: seq, err: err}
-		}
-		// 該当 (repo, server) のエントリを探す。見つからなければ「まだ無い」扱い。
-		msg.missing = true
-		for _, e := range logs.Logs {
-			if e.Repo == repo && e.Server == srv {
-				msg.path = e.Path
-				msg.missing = e.Missing
-				break
-			}
-		}
+// opStartFailed は統合操作を開始できなかったとき（前段の実行コンテキスト解決・対象名の
+// 解析・作成アクションの組み立ての失敗）の完了メッセージを整形する。op は操作名
+// （"switch" など）で、「<op> を開始できません」を summary に、原因を err に載せる。
+// switch / stop の前段（実行コンテキスト解決と名前解析）と create / remove の前段に
+// 散っていた同型の整形（計 6 箇所）をここへ集約する。別名変更だけは前置きが異なるため
+// 各所で個別に整形する。
+func opStartFailed(op string, err error) opDoneMsg {
+	return opDoneMsg{summary: op + " を開始できません", err: err}
+}
+
+// runner は TUI の各操作を同期実行し、結果を Bubble Tea のメッセージ（opDoneMsg /
+// resolvedMsg / treesMsg / reposMsg）へ整形して返す継ぎ目。model はこのインターフェース
+// 越しに操作を発行し、tea.Cmd クロージャは結果を運ぶだけの薄いラッパになる。キー入力から
+// 実際に呼ばれる操作と引数の結線は、テストがフェイク実装を差し込んで検証する（本番の
+// App 呼び出しはワークフロー側のテストが担う）。設定（cfg）は変化するため発行時にモデルが
+// スナップショットして各メソッドへ渡す。ctx / root / fw はモデルの生存期間を通じて不変。
+type runner interface {
+	Switch(cfg *config.File, name string, restart bool) tea.Msg
+	Stop(cfg *config.File, name string) tea.Msg
+	Create(cfg *config.File, name string, repos []string) tea.Msg
+	Remove(cfg *config.File, name string) tea.Msg
+	Alias(cfg *config.File, name, label string) tea.Msg
+	Doctor(cfg *config.File, fix bool) tea.Msg
+	Resolve(lastCfg *config.File, prev bool, curKey string, seq uint64) tea.Msg
+	Trees(cfg *config.File) tea.Msg
+	Repos(cfg *config.File) tea.Msg
+}
+
+// appOps は runner の本番実装。ctx / root / fw はモデルの生存期間を通じて不変なため
+// 構造体に持ち、変化する設定（cfg）だけを各メソッドが引数で受ける。各メソッドは buildApp で
+// App を組み、CLI / MCP と同じワークフロー（App の型付きメソッド）を同期実行して結果を運ぶ。
+type appOps struct {
+	ctx  context.Context
+	root statedir.Root
+	fw   *forwarder
+}
+
+// Resolve は設定を読み直し、全体のサーバー状態と、選択中サーバーノードのログパス
+// （Lines: 0 = パス解決のみ）を取り直す。この定期的な再解決が「表示の正」であり、MCP の
+// エージェントや別の CLI が switch してもログ表示は自動で新しい対象へ追従する。seq は発行順の
+// 世代番号で、全戻り値（エラー含む）に載せて古い解決の追い越しを applyResolved が弾く。
+func (o appOps) Resolve(lastCfg *config.File, prev bool, curKey string, seq uint64) tea.Msg {
+	warn := ""
+	cfg, err := config.Load()
+	if err != nil {
+		// 編集途中の不正な設定で TUI を落とさない。直近の正常値で動き続ける。
+		cfg, warn = lastCfg, "設定の再読み込みに失敗（直近の設定で継続）: "+err.Error()
+	}
+	cmd, err := serverCommand(cfg)
+	if err != nil {
+		return resolvedMsg{seq: seq, err: err}
+	}
+	a := buildApp(cfg, o.root, o.fw)
+	status, err := a.ServerStatus(o.ctx, cmd)
+	if err != nil {
+		return resolvedMsg{seq: seq, err: err}
+	}
+	msg := resolvedMsg{seq: seq, cfg: cfg, status: status, warn: warn, selKey: curKey}
+	if curKey == "" {
 		return msg
 	}
+	wt, repo, srv, ok := splitKey(curKey)
+	if !ok {
+		// key が壊れている場合はステータスのみを返す（パスは触らない）。
+		return msg
+	}
+	name, err := action.ParseName(wt)
+	if err != nil {
+		return resolvedMsg{seq: seq, err: err}
+	}
+	logs, err := a.ServerLogs(o.ctx, cmd, action.LogsKind{Scope: action.OneWorktree{Name: name}, Lines: 0, Prev: prev})
+	if err != nil {
+		return resolvedMsg{seq: seq, err: err}
+	}
+	// 該当 (repo, server) のエントリを探す。見つからなければ「まだ無い」扱い。
+	msg.missing = true
+	for _, e := range logs.Logs {
+		if e.Repo == repo && e.Server == srv {
+			msg.path = e.Path
+			msg.missing = e.Missing
+			break
+		}
+	}
+	return msg
 }
 
-// treesCmd は worktree 一覧（別名・稼働サーバーつき）を取り直すコマンドを返す。
+// Trees は worktree 一覧（別名・稼働サーバーつき）を取り直す。
+func (o appOps) Trees(cfg *config.File) tea.Msg {
+	res, err := buildApp(cfg, o.root, o.fw).List(o.ctx)
+	return treesMsg{res: res, err: err}
+}
+
+// Repos は create の作成先候補（repos_dir 直下のリポジトリ）を取り直す。
+func (o appOps) Repos(cfg *config.File) tea.Msg {
+	res, err := buildApp(cfg, o.root, o.fw).ListRepos(o.ctx)
+	return reposMsg{res: res, err: err}
+}
+
+// Switch は選択 worktree への server switch を実行する。他のフロントエンド（CLI / MCP）と
+// 同じ repo 操作ロックを通るため、並行する操作とはリポジトリ単位で直列化される。
+func (o appOps) Switch(cfg *config.File, name string, restart bool) tea.Msg {
+	cmd, err := serverCommand(cfg)
+	if err != nil {
+		return opStartFailed("switch", err)
+	}
+	parsed, err := action.ParseName(name)
+	if err != nil {
+		return opStartFailed("switch", err)
+	}
+	res, err := buildApp(cfg, o.root, o.fw).ServerSwitch(o.ctx, cmd, action.SwitchKind{Name: parsed, Restart: restart})
+	summary := fmt.Sprintf("switch %s: 対象なし", name)
+	if res != nil && len(res.PerServer) > 0 {
+		summary = fmt.Sprintf("switch %s: %s", name, render.SwitchSummary(res))
+	}
+	return opDoneMsg{summary: summary, err: err}
+}
+
+// Stop は選択 worktree のサーバー停止を実行する。
+func (o appOps) Stop(cfg *config.File, name string) tea.Msg {
+	cmd, err := serverCommand(cfg)
+	if err != nil {
+		return opStartFailed("stop", err)
+	}
+	parsed, err := action.ParseName(name)
+	if err != nil {
+		return opStartFailed("stop", err)
+	}
+	res, err := buildApp(cfg, o.root, o.fw).ServerStop(o.ctx, cmd, action.StopKind{Scope: action.OneWorktree{Name: parsed}})
+	summary := fmt.Sprintf("stop %s: 停止対象なし", name)
+	if res != nil && (res.Stopped > 0 || res.Failed > 0) {
+		summary = fmt.Sprintf("stop %s: %s", name, render.StopSummary(res))
+	}
+	return opDoneMsg{summary: summary, err: err}
+}
+
+// Create は worktree 作成を実行する。名前は入力済みの確定値、repos はモーダルで選択された
+// リポジトリ名。非対話（Selector: nil）のため、対象は明示された repos で決まる。
+func (o appOps) Create(cfg *config.File, name string, repos []string) tea.Msg {
+	act, err := action.NewCreate(name, repos, false, "", action.Overrides{}, cfg, os.Getenv, os.UserHomeDir)
+	if err != nil {
+		return opStartFailed("create", err)
+	}
+	res, err := buildApp(cfg, o.root, o.fw).Create(o.ctx, act)
+	summary := fmt.Sprintf("create %s: 対象なし", name)
+	if res != nil {
+		summary = fmt.Sprintf("create %s: %s", name, render.CreateSummary(res))
+	}
+	return opDoneMsg{summary: summary, err: err}
+}
+
+// Remove は worktree 削除を実行する。TUI からは常に非 --force で実行し、dirty で git が
+// 拒否した場合は CLI の強制削除へ誘導する（LLM も TUI も dirty の強制削除は明示コマンド
+// 経由に限る）。
+func (o appOps) Remove(cfg *config.File, name string) tea.Msg {
+	parsed, err := action.ParseName(name)
+	if err != nil {
+		return opStartFailed("remove", err)
+	}
+	_, err = buildApp(cfg, o.root, o.fw).Remove(o.ctx, action.Remove{Name: parsed, Force: false, KeepBranch: false})
+	if err != nil {
+		return opDoneMsg{
+			summary: fmt.Sprintf("remove %s: 失敗（強制削除は CLI: wt remove --force %s）", name, name),
+			err:     err,
+		}
+	}
+	return opDoneMsg{summary: fmt.Sprintf("remove %s: 完了", name)}
+}
+
+// Alias は worktree の表示用別名を設定・削除する。label が空なら削除、非空なら設定
+// （正規化後に保存された値を summary に載せる）。
+func (o appOps) Alias(cfg *config.File, name, label string) tea.Msg {
+	parsed, err := action.ParseName(name)
+	if err != nil {
+		return opDoneMsg{summary: "別名の変更を開始できません", err: err}
+	}
+	a := buildApp(cfg, o.root, o.fw)
+	if label == "" {
+		if _, err := a.AliasRemove(o.ctx, parsed); err != nil {
+			return opDoneMsg{summary: "別名を削除できません", err: err}
+		}
+		return opDoneMsg{summary: "別名を削除: " + name}
+	}
+	stored, err := a.AliasSet(o.ctx, parsed, label)
+	if err != nil {
+		return opDoneMsg{summary: "別名を設定できません", err: err}
+	}
+	return opDoneMsg{summary: fmt.Sprintf("別名を設定: %s → %s", name, stored)}
+}
+
+// Doctor は自己診断（--fix なら修復も）を実行し、結果を render.Doctor で描画したテキストと
+// ともに返す。結果ペインへの表示はモデルではなくここでバッファへ描画してから運ぶ（表示層の
+// 語彙を 1 箇所に保つ）。
+func (o appOps) Doctor(cfg *config.File, fix bool) tea.Msg {
+	res, err := buildApp(cfg, o.root, o.fw).Doctor(o.ctx, fix)
+	summary := "doctor 完了"
+	if fix {
+		summary = "doctor --fix 完了"
+	}
+	var text []string
+	if res != nil {
+		var buf bytes.Buffer
+		render.Doctor(&buf, res)
+		text = strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	}
+	return opDoneMsg{summary: summary, doctorText: text, err: err}
+}
+
+// 以下は model が発行する tea.Cmd の薄いラッパ。変化する設定（cfg）だけを発行時に
+// スナップショットして ops へ渡し、実行は runner（本番は appOps）に委ねる。ops は不変なので
+// クロージャ内から直接参照してよい。
+
+// resolveCmd は再解決コマンドを返す。世代（resolveSeq）の前進は Update の単一 goroutine で
+// 行い（ここでのインクリメントは競合しない）、以降の全戻り値にこの seq を載せる。
+func (m *model) resolveCmd() tea.Cmd {
+	m.resolveSeq++
+	seq := m.resolveSeq
+	lastCfg, prev, curKey := m.cfg, m.prev, m.curKey
+	return func() tea.Msg { return m.ops.Resolve(lastCfg, prev, curKey, seq) }
+}
+
+// treesCmd は worktree 一覧を取り直すコマンドを返す。
 func (m *model) treesCmd() tea.Cmd {
-	ctx, root, fw, cfg := m.ctx, m.root, m.fw, m.cfg
-	return func() tea.Msg {
-		res, err := buildApp(cfg, root, fw).List(ctx)
-		return treesMsg{res: res, err: err}
-	}
+	cfg := m.cfg
+	return func() tea.Msg { return m.ops.Trees(cfg) }
 }
 
-// reposCmd は create の作成先候補（repos_dir 直下のリポジトリ）を取り直すコマンドを
-// 返す。
+// reposCmd は create の作成先候補を取り直すコマンドを返す。
 func (m *model) reposCmd() tea.Cmd {
-	ctx, root, fw, cfg := m.ctx, m.root, m.fw, m.cfg
-	return func() tea.Msg {
-		res, err := buildApp(cfg, root, fw).ListRepos(ctx)
-		return reposMsg{res: res, err: err}
-	}
+	cfg := m.cfg
+	return func() tea.Msg { return m.ops.Repos(cfg) }
 }
 
-// switchCmd は選択 worktree への server switch を実行するコマンドを返す。他の
-// フロントエンド（CLI / MCP）と同じ repo 操作ロックを通るため、並行する操作とは
-// リポジトリ単位で直列化される。
+// switchCmd は選択 worktree への server switch を実行するコマンドを返す。
 func (m *model) switchCmd(name string, restart bool) tea.Cmd {
-	ctx, root, fw, cfg := m.ctx, m.root, m.fw, m.cfg
-	return func() tea.Msg {
-		cmd, err := serverCommand(cfg)
-		if err != nil {
-			return opDoneMsg{summary: "switch を開始できません", err: err}
-		}
-		parsed, err := action.ParseName(name)
-		if err != nil {
-			return opDoneMsg{summary: "switch を開始できません", err: err}
-		}
-		res, err := buildApp(cfg, root, fw).ServerSwitch(ctx, cmd, action.SwitchKind{Name: parsed, Restart: restart})
-		summary := fmt.Sprintf("switch %s: 対象なし", name)
-		if res != nil && len(res.PerServer) > 0 {
-			summary = fmt.Sprintf("switch %s: %s", name, render.SwitchSummary(res))
-		}
-		return opDoneMsg{summary: summary, err: err}
-	}
+	cfg := m.cfg
+	return func() tea.Msg { return m.ops.Switch(cfg, name, restart) }
 }
 
 // stopCmd は選択 worktree のサーバー停止を実行するコマンドを返す。
 func (m *model) stopCmd(name string) tea.Cmd {
-	ctx, root, fw, cfg := m.ctx, m.root, m.fw, m.cfg
-	return func() tea.Msg {
-		cmd, err := serverCommand(cfg)
-		if err != nil {
-			return opDoneMsg{summary: "stop を開始できません", err: err}
-		}
-		parsed, err := action.ParseName(name)
-		if err != nil {
-			return opDoneMsg{summary: "stop を開始できません", err: err}
-		}
-		res, err := buildApp(cfg, root, fw).ServerStop(ctx, cmd, action.StopKind{Scope: action.OneWorktree{Name: parsed}})
-		summary := fmt.Sprintf("stop %s: 停止対象なし", name)
-		if res != nil && (res.Stopped > 0 || res.Failed > 0) {
-			summary = fmt.Sprintf("stop %s: %s", name, render.StopSummary(res))
-		}
-		return opDoneMsg{summary: summary, err: err}
-	}
+	cfg := m.cfg
+	return func() tea.Msg { return m.ops.Stop(cfg, name) }
 }
 
-// createCmd は worktree 作成を実行するコマンドを返す。名前は入力済みの確定値、repos は
-// モーダルで選択されたリポジトリ名。非対話（Selector: nil）のため、対象は明示された
-// repos で決まる。
+// createCmd は worktree 作成を実行するコマンドを返す。
 func (m *model) createCmd(name string, repos []string) tea.Cmd {
-	ctx, root, fw, cfg := m.ctx, m.root, m.fw, m.cfg
-	return func() tea.Msg {
-		act, err := action.NewCreate(name, repos, false, "", action.Overrides{}, cfg, os.Getenv, os.UserHomeDir)
-		if err != nil {
-			return opDoneMsg{summary: "create を開始できません", err: err}
-		}
-		res, err := buildApp(cfg, root, fw).Create(ctx, act)
-		summary := fmt.Sprintf("create %s: 対象なし", name)
-		if res != nil {
-			summary = fmt.Sprintf("create %s: %s", name, render.CreateSummary(res))
-		}
-		return opDoneMsg{summary: summary, err: err}
-	}
+	cfg := m.cfg
+	return func() tea.Msg { return m.ops.Create(cfg, name, repos) }
 }
 
-// removeCmd は worktree 削除を実行するコマンドを返す。TUI からは常に非 --force で
-// 実行し、dirty で git が拒否した場合は CLI の強制削除へ誘導する（LLM も TUI も
-// dirty の強制削除は明示コマンド経由に限る）。
+// removeCmd は worktree 削除を実行するコマンドを返す。
 func (m *model) removeCmd(name string) tea.Cmd {
-	ctx, root, fw, cfg := m.ctx, m.root, m.fw, m.cfg
-	return func() tea.Msg {
-		parsed, err := action.ParseName(name)
-		if err != nil {
-			return opDoneMsg{summary: "remove を開始できません", err: err}
-		}
-		_, err = buildApp(cfg, root, fw).Remove(ctx, action.Remove{Name: parsed, Force: false, KeepBranch: false})
-		if err != nil {
-			return opDoneMsg{
-				summary: fmt.Sprintf("remove %s: 失敗（強制削除は CLI: wt remove --force %s）", name, name),
-				err:     err,
-			}
-		}
-		return opDoneMsg{summary: fmt.Sprintf("remove %s: 完了", name)}
-	}
+	cfg := m.cfg
+	return func() tea.Msg { return m.ops.Remove(cfg, name) }
 }
 
-// aliasCmd は worktree の表示用別名を設定・削除するコマンドを返す。label が空なら
-// 削除、非空なら設定（正規化後に保存された値を summary に載せる）。
+// aliasCmd は worktree の表示用別名を設定・削除するコマンドを返す。
 func (m *model) aliasCmd(name, label string) tea.Cmd {
-	ctx, root, fw, cfg := m.ctx, m.root, m.fw, m.cfg
-	return func() tea.Msg {
-		parsed, err := action.ParseName(name)
-		if err != nil {
-			return opDoneMsg{summary: "別名の変更を開始できません", err: err}
-		}
-		a := buildApp(cfg, root, fw)
-		if label == "" {
-			if _, err := a.AliasRemove(ctx, parsed); err != nil {
-				return opDoneMsg{summary: "別名を削除できません", err: err}
-			}
-			return opDoneMsg{summary: "別名を削除: " + name}
-		}
-		stored, err := a.AliasSet(ctx, parsed, label)
-		if err != nil {
-			return opDoneMsg{summary: "別名を設定できません", err: err}
-		}
-		return opDoneMsg{summary: fmt.Sprintf("別名を設定: %s → %s", name, stored)}
-	}
+	cfg := m.cfg
+	return func() tea.Msg { return m.ops.Alias(cfg, name, label) }
 }
 
-// doctorCmd は自己診断（--fix なら修復も）を実行し、結果を render.Doctor で描画した
-// テキストとともに返すコマンドを返す。結果ペインへの表示はモデルではなくここで
-// バッファへ描画してから運ぶ（表示層の語彙を 1 箇所に保つ）。
+// doctorCmd は自己診断（--fix なら修復も）を実行するコマンドを返す。
 func (m *model) doctorCmd(fix bool) tea.Cmd {
-	ctx, root, fw, cfg := m.ctx, m.root, m.fw, m.cfg
-	return func() tea.Msg {
-		res, err := buildApp(cfg, root, fw).Doctor(ctx, fix)
-		summary := "doctor 完了"
-		if fix {
-			summary = "doctor --fix 完了"
-		}
-		var text []string
-		if res != nil {
-			var buf bytes.Buffer
-			render.Doctor(&buf, res)
-			text = strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-		}
-		return opDoneMsg{summary: summary, doctorText: text, err: err}
-	}
+	cfg := m.cfg
+	return func() tea.Msg { return m.ops.Doctor(cfg, fix) }
 }

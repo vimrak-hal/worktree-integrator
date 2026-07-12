@@ -53,6 +53,83 @@ func key(msg string) tea.KeyMsg {
 	panic("unknown key " + msg)
 }
 
+// opCall は fakeOps が記録する 1 回の操作呼び出し。どの操作がどの引数で発行されたかを
+// 検証する（キー入力 → 操作の結線テスト用）。
+type opCall struct {
+	kind    string // "switch" / "stop" / "create" / "remove" / "alias" / "doctor"
+	cfg     *config.File
+	name    string
+	label   string
+	repos   []string
+	restart bool
+	fix     bool
+}
+
+// fakeOps は runner のフェイク実装。統合操作の呼び出しを記録し（読み取り系は無害な
+// メッセージを返す）、model に差し込むことで「キー入力 → 発行される操作と引数」を検証
+// できるようにする。本番の App 呼び出しはワークフロー側のテストが担う。
+type fakeOps struct{ calls []opCall }
+
+func (f *fakeOps) Switch(cfg *config.File, name string, restart bool) tea.Msg {
+	f.calls = append(f.calls, opCall{kind: "switch", cfg: cfg, name: name, restart: restart})
+	return opDoneMsg{summary: "fake switch"}
+}
+
+func (f *fakeOps) Stop(cfg *config.File, name string) tea.Msg {
+	f.calls = append(f.calls, opCall{kind: "stop", cfg: cfg, name: name})
+	return opDoneMsg{summary: "fake stop"}
+}
+
+func (f *fakeOps) Create(cfg *config.File, name string, repos []string) tea.Msg {
+	f.calls = append(f.calls, opCall{kind: "create", cfg: cfg, name: name, repos: repos})
+	return opDoneMsg{summary: "fake create"}
+}
+
+func (f *fakeOps) Remove(cfg *config.File, name string) tea.Msg {
+	f.calls = append(f.calls, opCall{kind: "remove", cfg: cfg, name: name})
+	return opDoneMsg{summary: "fake remove"}
+}
+
+func (f *fakeOps) Alias(cfg *config.File, name, label string) tea.Msg {
+	f.calls = append(f.calls, opCall{kind: "alias", cfg: cfg, name: name, label: label})
+	return opDoneMsg{summary: "fake alias"}
+}
+
+func (f *fakeOps) Doctor(cfg *config.File, fix bool) tea.Msg {
+	f.calls = append(f.calls, opCall{kind: "doctor", cfg: cfg, fix: fix})
+	return opDoneMsg{summary: "fake doctor"}
+}
+
+func (f *fakeOps) Resolve(*config.File, bool, string, uint64) tea.Msg { return resolvedMsg{} }
+func (f *fakeOps) Trees(*config.File) tea.Msg                         { return treesMsg{} }
+func (f *fakeOps) Repos(*config.File) tea.Msg                         { return reposMsg{} }
+
+// only は操作がちょうど 1 回発行されたことを確かめ、その呼び出しを返す。
+func (f *fakeOps) only(t *testing.T) opCall {
+	t.Helper()
+	if len(f.calls) != 1 {
+		t.Fatalf("操作はちょうど 1 回発行されるべき: %d 回 %+v", len(f.calls), f.calls)
+	}
+	return f.calls[0]
+}
+
+// drainCmd は cmd を実行し、tea.Batch が返す BatchMsg なら各サブコマンドまで実行する。
+// startOp は操作コマンドとスピナー tick を Batch でまとめるため、フェイク ops の記録を
+// 起こすには一段展開して実行する必要がある（結果メッセージ自体は捨ててよい）。
+func drainCmd(t *testing.T, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("コマンドが発行されていない")
+	}
+	if batch, ok := cmd().(tea.BatchMsg); ok {
+		for _, c := range batch {
+			if c != nil {
+				c()
+			}
+		}
+	}
+}
+
 // buildNodes は worktree ノードの配下に、メンバー repo に設定された全サーバーを
 // repo → server の順で並べ、稼働中サーバーにはそのフィールドを立てる。
 func TestBuildNodesLayout(t *testing.T) {
@@ -748,5 +825,67 @@ func TestDoctorDialogEscCloses(t *testing.T) {
 	}
 	if m.doctorText != nil {
 		t.Fatalf("Esc must clear doctor text, got %v", m.doctorText)
+	}
+}
+
+// W4-2: D → 削除確認（承認）で、選択 worktree に対する Remove が発行される。フォーム開閉や
+// 状態遷移だけでなく、実際に呼ばれる操作と引数（対象名・設定スナップショット）まで結線を検証する。
+func TestKeyWiringRemove(t *testing.T) {
+	m := newTestModel(t)
+	fake := &fakeOps{}
+	m.ops = fake
+	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a"})
+	m.buildNodes()
+
+	m.Update(key("D")) // 削除確認フォームを開く
+	m.formConfirm = true
+	_, cmd := m.finishForm()
+	drainCmd(t, cmd)
+
+	got := fake.only(t)
+	if got.kind != "remove" || got.name != "feat-a" {
+		t.Fatalf("D は Remove(feat-a) を発行すべき: %+v", got)
+	}
+	if got.cfg != m.cfg {
+		t.Fatal("Remove には発行時の設定スナップショットが渡るべき")
+	}
+}
+
+// W4-2: s → 選択 worktree への Switch が restart=false で発行される（再起動は r の別経路）。
+func TestKeyWiringSwitch(t *testing.T) {
+	m := newTestModel(t)
+	fake := &fakeOps{}
+	m.ops = fake
+	m.cfg = serverCfg()
+	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}}})
+	m.buildNodes()
+	m.sel = 0 // feat-a 見出し
+
+	_, cmd := m.Update(key("s"))
+	drainCmd(t, cmd)
+
+	got := fake.only(t)
+	if got.kind != "switch" || got.name != "feat-a" || got.restart {
+		t.Fatalf("s は Switch(feat-a, restart=false) を発行すべき: %+v", got)
+	}
+}
+
+// W4-2: a → 別名フォームへ入力した値で Alias が発行される（設定経路。空入力は削除経路で契約は
+// aliasCmd 側）。キー入力で開いたフォームの確定値がそのまま操作の引数へ渡ることを検証する。
+func TestKeyWiringAlias(t *testing.T) {
+	m := newTestModel(t)
+	fake := &fakeOps{}
+	m.ops = fake
+	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a"})
+	m.buildNodes()
+
+	m.Update(key("a")) // 別名フォームを開く（promptTarget=feat-a）
+	m.formAlias = "新しい別名"
+	_, cmd := m.finishForm()
+	drainCmd(t, cmd)
+
+	got := fake.only(t)
+	if got.kind != "alias" || got.name != "feat-a" || got.label != "新しい別名" {
+		t.Fatalf("a は Alias(feat-a, 新しい別名) を発行すべき: %+v", got)
 	}
 }
