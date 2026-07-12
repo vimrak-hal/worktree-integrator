@@ -73,6 +73,6 @@ nav:
       - Configuration: configuration.md
       - Hooks: hooks.md
       - Copy Files: copy-files.md
-  - Contribution:
+  - コントリビューション:
       - Architecture: architecture.md
       - Testing: testing.md
