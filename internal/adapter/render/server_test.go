@@ -182,6 +182,29 @@ func TestStopSummary(t *testing.T) {
 	})
 }
 
+// SwitchSummary は switch 完了サマリの本文（件数の内訳）を「サマリ:」や改行なしで
+// 返す。CLI/MCP（Switch）と TUI（switchCmd）が共有する本文の契約。
+func TestSwitchSummaryBody(t *testing.T) {
+	got := SwitchSummary(&server.SwitchResult{Started: 1, Already: 1, Skipped: 2, Failed: 0})
+	if want := "1 起動, 1 既起動, 2 スキップ, 0 失敗"; got != want {
+		t.Fatalf("SwitchSummary = %q, want %q", got, want)
+	}
+}
+
+// StopSummary は失敗の有無で本文が変わる（失敗 0 件なら停止件数のみ）。
+func TestStopSummaryBody(t *testing.T) {
+	t.Run("StoppedOnly", func(t *testing.T) {
+		if got := StopSummary(&server.StopResult{Stopped: 3}); got != "3 停止" {
+			t.Fatalf("StopSummary = %q, want %q", got, "3 停止")
+		}
+	})
+	t.Run("WithFailures", func(t *testing.T) {
+		if got := StopSummary(&server.StopResult{Stopped: 1, Failed: 2}); got != "1 停止, 2 失敗" {
+			t.Fatalf("StopSummary = %q, want %q", got, "1 停止, 2 失敗")
+		}
+	})
+}
+
 func TestStatusTableTruncatesAliasAndKeepsHeader(t *testing.T) {
 	var buf bytes.Buffer
 	Status(&buf, &server.StatusResult{Rows: []server.Row{

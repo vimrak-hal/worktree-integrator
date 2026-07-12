@@ -38,7 +38,7 @@ func Create(w io.Writer, res *create.Result) {
 	hookGroup(w, res, "after_worktree")
 	hookGroup(w, res, "after")
 
-	fmt.Fprintf(w, "\nサマリ: %d 作成, %d スキップ, %d 失敗\n", res.Created, res.Skipped, res.Failed)
+	fmt.Fprintf(w, "\nサマリ: %s\n", CreateSummary(res))
 	for _, r := range res.Repos {
 		if r.Status == create.RepoCreated {
 			if r.Copy != nil && len(r.Copy.Failures) > 0 {
@@ -66,6 +66,14 @@ func Create(w io.Writer, res *create.Result) {
 	if res.SetupInvalidateError != "" {
 		fmt.Fprintf(w, "警告: サーバーの setup 記録を無効化できませんでした: %s\n", res.SetupInvalidateError)
 	}
+}
+
+// CreateSummary は create 完了サマリの本文（件数の内訳）を返す。「サマリ:」の
+// プレフィクスや改行は含まない。CLI/MCP の最終描画（Create）と TUI（createCmd）が
+// 同じ語彙を共有するために切り出す。
+func CreateSummary(res *create.Result) string {
+	return fmt.Sprintf("%d 作成, %d スキップ, %d 失敗",
+		res.Created, res.Skipped, res.Failed)
 }
 
 // hookGroup は 1 つのタイミングのフック結果を、件数付きのヘッダーに続けて 1 行ずつ

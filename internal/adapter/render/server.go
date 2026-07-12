@@ -54,7 +54,14 @@ func Switch(w io.Writer, res *server.SwitchResult) {
 			failureLines(w, tag, o.Failure)
 		}
 	}
-	fmt.Fprintf(w, "\nサマリ: %d 起動, %d 既起動, %d スキップ, %d 失敗\n",
+	fmt.Fprintf(w, "\nサマリ: %s\n", SwitchSummary(res))
+}
+
+// SwitchSummary は switch 完了サマリの本文（件数の内訳）を返す。「サマリ:」の
+// プレフィクスや改行は含まない。CLI/MCP の最終描画（Switch）と TUI（switchCmd）が
+// 同じ語彙を共有するために切り出す。
+func SwitchSummary(res *server.SwitchResult) string {
+	return fmt.Sprintf("%d 起動, %d 既起動, %d スキップ, %d 失敗",
 		res.Started, res.Already, res.Skipped, res.Failed)
 }
 
@@ -98,11 +105,17 @@ func Stop(w io.Writer, res *server.StopResult) {
 		fmt.Fprintln(w, "停止対象のサーバーはありません")
 		return
 	}
+	fmt.Fprintf(w, "\nサマリ: %s\n", StopSummary(res))
+}
+
+// StopSummary は stop 完了サマリの本文を返す。失敗が無ければ停止件数のみ、失敗が
+// あれば失敗件数を添える。「サマリ:」のプレフィクスや改行は含まない。CLI/MCP の
+// 最終描画（Stop）と TUI（stopCmd）が同じ語彙を共有するために切り出す。
+func StopSummary(res *server.StopResult) string {
 	if res.Failed > 0 {
-		fmt.Fprintf(w, "\nサマリ: %d 停止, %d 失敗\n", res.Stopped, res.Failed)
-	} else {
-		fmt.Fprintf(w, "\nサマリ: %d 停止\n", res.Stopped)
+		return fmt.Sprintf("%d 停止, %d 失敗", res.Stopped, res.Failed)
 	}
+	return fmt.Sprintf("%d 停止", res.Stopped)
 }
 
 // Status は `server status` のテーブルを描画する。

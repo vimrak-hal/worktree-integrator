@@ -237,8 +237,7 @@ func (m *model) switchCmd(name string, restart bool) tea.Cmd {
 		res, err := buildApp(cfg, root, fw).ServerSwitch(ctx, cmd, action.SwitchKind{Name: parsed, Restart: restart})
 		summary := fmt.Sprintf("switch %s: 対象なし", name)
 		if res != nil && len(res.PerServer) > 0 {
-			summary = fmt.Sprintf("switch %s: %d 起動, %d 既起動, %d スキップ, %d 失敗",
-				name, res.Started, res.Already, res.Skipped, res.Failed)
+			summary = fmt.Sprintf("switch %s: %s", name, render.SwitchSummary(res))
 		}
 		return opDoneMsg{summary: summary, err: err}
 	}
@@ -259,7 +258,7 @@ func (m *model) stopCmd(name string) tea.Cmd {
 		res, err := buildApp(cfg, root, fw).ServerStop(ctx, cmd, action.StopKind{Scope: action.OneWorktree{Name: parsed}})
 		summary := fmt.Sprintf("stop %s: 停止対象なし", name)
 		if res != nil && (res.Stopped > 0 || res.Failed > 0) {
-			summary = fmt.Sprintf("stop %s: %d 停止, %d 失敗", name, res.Stopped, res.Failed)
+			summary = fmt.Sprintf("stop %s: %s", name, render.StopSummary(res))
 		}
 		return opDoneMsg{summary: summary, err: err}
 	}
@@ -278,8 +277,7 @@ func (m *model) createCmd(name string, repos []string) tea.Cmd {
 		res, err := buildApp(cfg, root, fw).Create(ctx, act)
 		summary := fmt.Sprintf("create %s: 対象なし", name)
 		if res != nil {
-			summary = fmt.Sprintf("create %s: %d 作成, %d スキップ, %d 失敗",
-				name, res.Created, res.Skipped, res.Failed)
+			summary = fmt.Sprintf("create %s: %s", name, render.CreateSummary(res))
 		}
 		return opDoneMsg{summary: summary, err: err}
 	}

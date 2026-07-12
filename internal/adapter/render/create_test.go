@@ -36,6 +36,15 @@ func TestCreateSummaryGroupsRepos(t *testing.T) {
 	}
 }
 
+// CreateSummary は create 完了サマリの本文（件数の内訳）を「サマリ:」や改行なしで
+// 返す。CLI/MCP（Create）と TUI（createCmd）が共有する本文の契約。
+func TestCreateSummaryBody(t *testing.T) {
+	got := CreateSummary(&create.Result{Created: 1, Skipped: 1, Failed: 1})
+	if want := "1 作成, 1 スキップ, 1 失敗"; got != want {
+		t.Fatalf("CreateSummary = %q, want %q", got, want)
+	}
+}
+
 // キャンセルによる未着手スキップ（stage=canceled）はキャンセルと表示される。
 func TestCreateCanceledSkipLabel(t *testing.T) {
 	var buf bytes.Buffer
