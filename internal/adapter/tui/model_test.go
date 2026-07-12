@@ -325,20 +325,93 @@ func TestFilterNarrowsRenderedLines(t *testing.T) {
 	}
 }
 
-// 上方向のスクロールは追従を解除し、f で再開する（ログペインにフォーカス時）。
+// 上方向のスクロール（u=半ページ上）は追従を解除し、f で再開する。フォーカスは廃止された
+// ため、ログのキーはダイアログ非表示中どこでもグローバルに効く。
 func TestScrollDisablesFollow(t *testing.T) {
 	m := newTestModel(t)
-	m.focus = focusLog
 	if !m.follow {
 		t.Fatal("follow must start enabled")
 	}
-	m.Update(key("k"))
+	m.Update(key("u")) // 半ページ上スクロール → 追従解除
 	if m.follow {
 		t.Fatal("scrolling up must disable follow")
 	}
 	m.Update(key("f"))
 	if !m.follow {
 		t.Fatal("'f' must re-enable follow")
+	}
+}
+
+// フォーカス廃止でグローバル化したログキー（f/p/w/d/u）が、ツリーのキーと衝突せず、
+// focus なしでそのまま効く。
+func TestLogKeysAreGlobal(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg = serverCfg()
+	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}}})
+	m.buildNodes()
+
+	// f: 追従トグル。
+	if !m.follow {
+		t.Fatal("test setup: follow must start enabled")
+	}
+	m.Update(key("f"))
+	if m.follow {
+		t.Fatal("f must toggle follow off")
+	}
+
+	// w: 折り返しトグル。
+	before := m.wrap
+	m.Update(key("w"))
+	if m.wrap == before {
+		t.Fatal("w must toggle wrap")
+	}
+
+	// p: 前世代トグル（再解決コマンドを返す）。
+	if _, cmd := m.Update(key("p")); cmd == nil {
+		t.Fatal("p must toggle prev and issue a resolve command")
+	}
+	if !m.prev {
+		t.Fatal("p must toggle prev on")
+	}
+
+	// d/u: 半ページスクロール。u は追従を解除する。
+	m.follow = true
+	m.Update(key("d"))
+	m.Update(key("u"))
+	if m.follow {
+		t.Fatal("u (half page up) must disable follow")
+	}
+}
+
+// h は折りたたみ、l は展開。Space のトグルは別途維持される（空いた h/l をツリーの
+// 折りたたみ/展開へ割り当てた）。
+func TestCollapseExpandKeys(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg = serverCfg()
+	// backend 稼働 → 既定で展開。カーソルは見出し上。
+	m.trees = treesResult(
+		tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}},
+			Servers: []tree.ServerCell{{Repo: "api", Server: "backend", Pid: 4242}}},
+	)
+	m.buildNodes()
+	m.sel = 0
+	if m.nodes[0].collapsed {
+		t.Fatal("test setup: feat-a should be expanded")
+	}
+
+	m.Update(key("h")) // 折りたたむ
+	if !m.collapsed["feat-a"] || len(m.nodes) != 1 {
+		t.Fatalf("h must collapse feat-a: collapsed=%v nodes=%d", m.collapsed["feat-a"], len(m.nodes))
+	}
+
+	m.Update(key("h")) // 既に折りたたみ済み → 変化なし（冪等）
+	if !m.collapsed["feat-a"] || len(m.nodes) != 1 {
+		t.Fatal("h on a collapsed worktree must keep it collapsed")
+	}
+
+	m.Update(key("l")) // 展開する
+	if m.collapsed["feat-a"] || len(m.nodes) != 3 {
+		t.Fatalf("l must expand feat-a: collapsed=%v nodes=%d", m.collapsed["feat-a"], len(m.nodes))
 	}
 }
 
@@ -637,7 +710,6 @@ func TestWindowResizePreservesYOffset(t *testing.T) {
 	os.WriteFile(log, []byte(b.String()), 0o644)
 	m.applyResolved(resolvedMsg{selKey: k, path: log, status: &server.StatusResult{}})
 
-	m.focus = focusLog
 	m.follow = false
 	m.vp.SetYOffset(50)
 	off := m.vp.YOffset
@@ -650,19 +722,31 @@ func TestWindowResizePreservesYOffset(t *testing.T) {
 	}
 }
 
-// C6: doctor 遷移では直前のログ閲覧の YOffset を捨て、必ず先頭から表示する。
+// C6: doctor 遷移では専用ダイアログ（dvp）を先頭から表示する。ログ（m.vp）は背後に残るため
+// その YOffset は doctor スクロールの影響を受けない。
 func TestDoctorTransitionResetsYOffset(t *testing.T) {
 	m := newTestModel(t)
-	m.vp.SetContent(strings.Repeat("x\n", 100))
-	m.vp.SetYOffset(40)
-	if m.vp.YOffset == 0 {
-		t.Fatal("test setup: YOffset must be advanced")
-	}
 	m.Update(opDoneMsg{summary: "doctor 完了", doctorText: []string{"a", "b", "c"}})
 	if !m.doctorMode {
 		t.Fatal("doctorText must switch to doctor mode")
 	}
-	if m.vp.YOffset != 0 {
-		t.Fatalf("doctor transition must go to top, got YOffset=%d", m.vp.YOffset)
+	if m.dvp.YOffset != 0 {
+		t.Fatalf("doctor dialog must start at top, got YOffset=%d", m.dvp.YOffset)
+	}
+}
+
+// doctor ダイアログは Esc で閉じ、doctorMode と結果テキストがクリアされる。
+func TestDoctorDialogEscCloses(t *testing.T) {
+	m := newTestModel(t)
+	m.Update(opDoneMsg{summary: "doctor 完了", doctorText: []string{"問題なし"}})
+	if !m.doctorMode {
+		t.Fatal("doctorText must enter doctor mode")
+	}
+	m.Update(key("esc"))
+	if m.doctorMode {
+		t.Fatal("Esc must close the doctor dialog")
+	}
+	if m.doctorText != nil {
+		t.Fatalf("Esc must clear doctor text, got %v", m.doctorText)
 	}
 }
