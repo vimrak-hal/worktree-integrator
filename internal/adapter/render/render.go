@@ -17,6 +17,18 @@ import (
 	"unicode/utf8"
 )
 
+// Emit は「エラー時も部分結果を見せる」規約の単一実装点である。res が非 nil なら、
+// err の有無に関わらず draw で描画してから err を返す（res が nil の早期エラーでは
+// 何も描画せず err をそのまま返す）。CLI（adapter/clirun）と MCP（adapter/mcpserver）が
+// この 1 箇所を共有することで、ワークフローが部分 Result を返し始めても両フロントエンドの
+// 挙動が割れない。
+func Emit[R any](w io.Writer, res *R, err error, draw func(io.Writer, *R)) error {
+	if res != nil {
+		draw(w, res)
+	}
+	return err
+}
+
 // JSON は v を整形済み JSON として w へ書き出す（`--json` フラグの実装）。
 func JSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)

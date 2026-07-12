@@ -23,6 +23,7 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -109,10 +110,13 @@ func newServer() *mcp.Server {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "server_logs",
-		Description: "Read the trailing `lines` (default 50, at most 2000) of dev-server logs. With a " +
-			"`worktree_name`, read that worktree's logs (running or not); otherwise the currently " +
-			"running servers' (falling back to the last-started log when a server is down). " +
+		// 既定行数・上限は定数から文言を生成し、jsonschema タグ・clampLines との三重の
+		// 手書きを 1 つ（定数）に寄せる（params.go の serverLogsLineLimit / defaultLogLines）。
+		Description: fmt.Sprintf("Read the trailing `lines` (default %d, at most %d) of dev-server logs. With a "+
+			"`worktree_name`, read that worktree's logs (running or not); otherwise the currently "+
+			"running servers' (falling back to the last-started log when a server is down). "+
 			"Set `prev` to read the previous log generation rotated aside at the last server start.",
+			defaultLogLines, serverLogsLineLimit),
 	}, handle(actionServerLogs))
 
 	mcp.AddTool(srv, &mcp.Tool{

@@ -72,10 +72,15 @@ type NoParams struct{}
 // ----- パラメータの解釈 -----
 
 // serverLogsLineLimit は server_logs が一度に返す最大行数。MCP クライアントの
-// コンテキストを巨大なログで溢れさせないための上限である。
+// コンテキストを巨大なログで溢れさせないための上限である。ツール説明文
+// （mcpserver.go）はこの定数から fmt.Sprintf で生成されるが、ServerLogsParams.Lines の
+// jsonschema タグは構造体タグが文字列リテラルのため定数を埋め込めない。タグの
+// 「clamped to at most 2000」はこの定数と手動で同期すること（説明文・タグと同期）。
 const serverLogsLineLimit = 2000
 
-// defaultLogLines は lines 省略時の既定行数。
+// defaultLogLines は lines 省略時の既定行数。serverLogsLineLimit と同様、ツール説明文は
+// この定数から生成されるが、jsonschema タグの「default 50」は文字列リテラルのため
+// 手動で同期すること（説明文・タグと同期）。
 const defaultLogLines = 50
 
 // clampLines は server_logs の行数を [既定 50, 上限 2000] に収める。0 以下

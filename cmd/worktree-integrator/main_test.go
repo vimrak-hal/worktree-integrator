@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +11,10 @@ import (
 	"github.com/vimrak-hal/worktree-integrator/internal/adapter/cli"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/config"
 )
+
+// このファイルは run() の薄い統合テスト（引数解析・実行モードの振り分け・終了コードの
+// 写像・config check の配線）に絞る。各コマンドの dispatch と render の疎通確認は
+// adapter/clirun のテスト（clirun_test.go）へ移した。
 
 // isolate は HOME（$XDG_CONFIG_HOME 未設定時の設定ファイル探索先）・
 // XDG_CONFIG_HOME（設定ファイルの探索先）・XDG_STATE_HOME（状態の保存先）を
@@ -111,32 +114,8 @@ func TestExitCodeMapsPromptInterruptTo130(t *testing.T) {
 	}
 }
 
-// server status --json は StatusResult をそのまま JSON で出力する（テーブル描画
-// なし）。設定なしの初期状態では no_server_config が立つ。
-func TestRunServerStatusJson(t *testing.T) {
-	isolate(t)
-	var stdout, stderr bytes.Buffer
-
-	code := run(t.Context(), []string{"server", "status", "--json"}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("exit code = %d, want 0 (stderr: %q)", code, stderr.String())
-	}
-	var decoded struct {
-		Rows           []map[string]any `json:"rows"`
-		NoServerConfig bool             `json:"no_server_config"`
-	}
-	if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil {
-		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
-	}
-	if !decoded.NoServerConfig || len(decoded.Rows) != 0 {
-		t.Fatalf("decoded = %+v", decoded)
-	}
-	if strings.Contains(stdout.String(), "REPO") {
-		t.Fatalf("--json はテーブルを描画しない: %q", stdout.String())
-	}
-}
-
-// (i) config check の 3 経路: ファイル不存在 / 正常 / 不正、をそれぞれ確認する。
+// (i) config check の 3 経路: ファイル不存在 / 正常 / 不正、を run() 経由（clirun.ConfigCheck
+// の配線と終了コードの写像）で確認する。
 
 // 設定ファイルが無ければ「既定値で動作します」で exit 0。
 func TestRunConfigCheckMissingFile(t *testing.T) {
@@ -188,90 +167,6 @@ func TestRunConfigCheckInvalidFile(t *testing.T) {
 	}
 }
 
-// tree 系コマンド（list / doctor / repos / enter / remove）の main ディスパッチの
-// 疎通確認。空の環境では list は空の一覧、doctor は発見なしで exit 0、repos は
-// 「見つかりません」を出す。enter / remove は存在しない worktree に対して exit 1。
-func TestRunTreeCommands(t *testing.T) {
-	isolate(t)
-	t.Setenv("WT_REPOS_DIR", t.TempDir())
-	t.Setenv("WT_WORKTREES_DIR", t.TempDir())
-
-	t.Run("list --json", func(t *testing.T) {
-		var stdout, stderr bytes.Buffer
-		if code := run(t.Context(), []string{"list", "--json"}, &stdout, &stderr); code != 0 {
-			t.Fatalf("exit code = %d (stderr: %q)", code, stderr.String())
-		}
-		var decoded struct {
-			Worktrees []map[string]any `json:"worktrees"`
-		}
-		if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil {
-			t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
-		}
-		if decoded.Worktrees == nil || len(decoded.Worktrees) != 0 {
-			t.Fatalf("decoded = %+v", decoded)
-		}
-	})
-	t.Run("list", func(t *testing.T) {
-		var stdout, stderr bytes.Buffer
-		if code := run(t.Context(), []string{"list"}, &stdout, &stderr); code != 0 {
-			t.Fatalf("exit code = %d (stderr: %q)", code, stderr.String())
-		}
-		if !strings.Contains(stdout.String(), "worktree はありません") {
-			t.Fatalf("stdout = %q", stdout.String())
-		}
-	})
-	t.Run("doctor", func(t *testing.T) {
-		var stdout, stderr bytes.Buffer
-		if code := run(t.Context(), []string{"doctor"}, &stdout, &stderr); code != 0 {
-			t.Fatalf("exit code = %d (stderr: %q)", code, stderr.String())
-		}
-		if !strings.Contains(stdout.String(), "問題は見つかりませんでした") {
-			t.Fatalf("stdout = %q", stdout.String())
-		}
-	})
-	t.Run("repos", func(t *testing.T) {
-		var stdout, stderr bytes.Buffer
-		if code := run(t.Context(), []string{"repos"}, &stdout, &stderr); code != 0 {
-			t.Fatalf("exit code = %d (stderr: %q)", code, stderr.String())
-		}
-		if !strings.Contains(stdout.String(), "リポジトリが見つかりません") {
-			t.Fatalf("stdout = %q", stdout.String())
-		}
-	})
-	t.Run("enter missing", func(t *testing.T) {
-		var stdout, stderr bytes.Buffer
-		if code := run(t.Context(), []string{"enter", "no-such"}, &stdout, &stderr); code != 1 {
-			t.Fatalf("exit code = %d", code)
-		}
-		if !strings.Contains(stderr.String(), "がありません") {
-			t.Fatalf("stderr = %q", stderr.String())
-		}
-	})
-	t.Run("remove missing", func(t *testing.T) {
-		var stdout, stderr bytes.Buffer
-		if code := run(t.Context(), []string{"remove", "no-such"}, &stdout, &stderr); code != 1 {
-			t.Fatalf("exit code = %d", code)
-		}
-	})
-}
-
-// 非 TTY（テストのバッファ stdio）での素の create は、--repo / --all の指定を促す
-// エラーで exit 1 になる（対話プロンプトへは進まない）。
-func TestRunCreateWithoutTTYRequiresExplicitRepos(t *testing.T) {
-	isolate(t)
-	t.Setenv("WT_REPOS_DIR", t.TempDir())
-	t.Setenv("WT_WORKTREES_DIR", t.TempDir())
-	var stdout, stderr bytes.Buffer
-
-	code := run(t.Context(), []string{"feat-x"}, &stdout, &stderr)
-	if code != 1 {
-		t.Fatalf("exit code = %d (stderr: %q)", code, stderr.String())
-	}
-	if !strings.Contains(stderr.String(), "--repo か --all を指定してください") {
-		t.Fatalf("stderr = %q", stderr.String())
-	}
-}
-
 // writeConfigFile は isolate() が向けた XDG_CONFIG_HOME 配下の既定パスへ設定ファイルを
 // 書き込む（実際の ~/.config には一切触れない）。
 func writeConfigFile(t *testing.T, content string) string {
@@ -287,25 +182,4 @@ func writeConfigFile(t *testing.T, content string) string {
 		t.Fatal(err)
 	}
 	return path
-}
-
-// alias set → list の往復（Result 経由の描画）は stdout に日本語の案内を出す —
-// render 経路の疎通確認。
-func TestRunAliasSetRoundTrip(t *testing.T) {
-	isolate(t)
-	var stdout, stderr bytes.Buffer
-
-	if code := run(t.Context(), []string{"alias", "set", "feat-x", "Login"}, &stdout, &stderr); code != 0 {
-		t.Fatalf("exit code = %d (stderr: %q)", code, stderr.String())
-	}
-	if !strings.Contains(stdout.String(), "別名を設定しました: feat-x = Login") {
-		t.Fatalf("stdout = %q", stdout.String())
-	}
-	stdout.Reset()
-	if code := run(t.Context(), []string{"alias", "list"}, &stdout, &stderr); code != 0 {
-		t.Fatalf("exit code = %d (stderr: %q)", code, stderr.String())
-	}
-	if !strings.Contains(stdout.String(), "feat-x") || !strings.Contains(stdout.String(), "Login") {
-		t.Fatalf("stdout = %q", stdout.String())
-	}
 }

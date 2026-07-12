@@ -173,6 +173,27 @@ func Logs(w io.Writer, res *server.LogsResult) {
 	}
 }
 
+// FollowHeader は `server logs -f`（tail -f）の追跡開始前に、各ログのパス（欠落は
+// 「ログがありません」）を 1 行ずつ書き出し、実際に追跡できるパスの一覧を返す。追跡
+// 自体は CLI 専用の表示手段（adapter/clirun が cli.FollowLogs を呼ぶ）で、MCP からは
+// 型レベルで到達不能である。追跡できるログが 1 件も無ければ、その旨を書き出して空を返す。
+func FollowHeader(w io.Writer, res *server.LogsResult) []string {
+	var paths []string
+	for _, entry := range res.Logs {
+		tag := entry.Repo + "/" + entry.Server
+		if entry.Missing {
+			tagged(w, tag, "ログがありません (%s)", entry.Path)
+			continue
+		}
+		tagged(w, tag, "%s", entry.Path)
+		paths = append(paths, entry.Path)
+	}
+	if len(paths) == 0 {
+		fmt.Fprintln(w, "表示できるログがありません")
+	}
+	return paths
+}
+
 // anyMissing は Missing エントリが 1 件でもあるかを返す（「表示できるログが
 // ありません」との二重案内を避けるため）。
 func anyMissing(entries []server.LogEntry) bool {

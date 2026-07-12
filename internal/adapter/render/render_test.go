@@ -3,6 +3,9 @@ package render
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +14,44 @@ import (
 	"github.com/vimrak-hal/worktree-integrator/internal/app"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/git/worktree"
 )
+
+// Emit は res が非 nil なら（エラーの有無に関わらず）draw で描画してから err を返し、
+// res が nil なら描画せず err をそのまま返す（「エラー時も部分結果を見せる」規約の
+// 単一実装点）。
+func TestEmit(t *testing.T) {
+	type box struct{ V string }
+	draw := func(w io.Writer, b *box) { fmt.Fprintf(w, "drawn:%s", b.V) }
+
+	t.Run("res 非 nil・err なしは描画して nil", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := Emit(&buf, &box{V: "ok"}, nil, draw); err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		if buf.String() != "drawn:ok" {
+			t.Fatalf("buf = %q", buf.String())
+		}
+	})
+	t.Run("res 非 nil・err ありは描画してから err を返す", func(t *testing.T) {
+		var buf bytes.Buffer
+		want := errors.New("boom")
+		if err := Emit(&buf, &box{V: "partial"}, want, draw); err != want {
+			t.Fatalf("err = %v, want %v", err, want)
+		}
+		if buf.String() != "drawn:partial" {
+			t.Fatalf("buf = %q", buf.String())
+		}
+	})
+	t.Run("res nil は描画せず err をそのまま返す", func(t *testing.T) {
+		var buf bytes.Buffer
+		want := errors.New("boom")
+		if err := Emit[box](&buf, nil, want, draw); err != want {
+			t.Fatalf("err = %v, want %v", err, want)
+		}
+		if buf.Len() != 0 {
+			t.Fatalf("nil res は描画してはならない: %q", buf.String())
+		}
+	})
+}
 
 // PadRight は width 未満ならスペースで右詰めし、width 以上ならそのまま返す。
 // 日本語（マルチバイト）でもバイトではなくルーン単位で数えて整列する。

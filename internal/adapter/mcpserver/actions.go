@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/adapter/render"
@@ -49,59 +50,58 @@ func newToolApp() (*toolApp, error) {
 // text は取り込みバッファの現在の内容を返す。
 func (t *toolApp) text() string { return t.buf.String() }
 
+// run は構造化 Result を返すツールアクション共通のグルーを畳む: toolApp を構築し、
+// call でワークフローを駆動して型付き Result を得て、その Result を render.Emit 経由で
+// 取り込みバッファに描画してから (Result, テキスト, エラー) を返す。render.Emit は
+// 「res が非 nil ならエラーの有無に関わらず描画してから err を返す」規約の単一実装点で
+// あり（CLI の adapter/clirun と共有）、部分 Result の描画挙動が両フロントエンドで
+// 一致することを保証する。call が返すエラー（設定解決やコマンド構築の失敗を含む）は
+// そのまま伝播する。
+func run[R any](call func(*app.App) (*R, error), draw func(io.Writer, *R)) (*R, string, error) {
+	t, err := newToolApp()
+	if err != nil {
+		return nil, "", err
+	}
+	res, runErr := call(t.app)
+	// text() より先に Emit を評価する（引数の評価順で text がバッファを先読みしないよう、
+	// 描画を確定させてから取り込む）。
+	outErr := render.Emit(&t.buf, res, runErr, draw)
+	return res, t.text(), outErr
+}
+
 // ----- アクションのグルーコード -----
 //
 // 各アクションは（型付き Result・人間向けテキスト・エラー）を返し、handle が
 // structuredContent と TextContent へ写す。
 
 func actionReposList(ctx context.Context, _ NoParams) (*app.ReposResult, string, error) {
-	t, err := newToolApp()
-	if err != nil {
-		return nil, "", err
-	}
-	res, err := t.app.ListRepos(ctx)
-	if err != nil {
-		return nil, t.text(), err
-	}
-	render.Repos(&t.buf, res)
-	return res, t.text(), nil
+	return run(func(a *app.App) (*app.ReposResult, error) {
+		return a.ListRepos(ctx)
+	}, render.Repos)
 }
 
 func actionCreateWorktrees(ctx context.Context, params CreateParams) (*create.Result, string, error) {
 	if len(params.Repos) == 0 {
 		return nil, "", errors.New("`repos` を 1 つ以上指定してください（候補は repos_list で取得できます）")
 	}
-	t, err := newToolApp()
-	if err != nil {
-		return nil, "", err
-	}
-	act, err := action.NewCreate(params.WorktreeName, params.Repos, false, params.Base, action.Overrides{
-		Remote:      params.Remote,
-		Concurrency: params.Concurrency,
-	}, t.app.Config, os.Getenv, os.UserHomeDir)
-	if err != nil {
-		return nil, "", err
-	}
-
-	// 明示されたリポジトリ名の実在検証は app/create 内の 1 箇所で行われる
-	//（未知の名前はエラー）。CLI の --repo と同じ経路である。
-	res, runErr := t.app.Create(ctx, act)
-	if res != nil {
-		render.Create(&t.buf, res)
-	}
-	return res, t.text(), runErr
+	return run(func(a *app.App) (*create.Result, error) {
+		act, err := action.NewCreate(params.WorktreeName, params.Repos, false, params.Base, action.Overrides{
+			Remote:      params.Remote,
+			Concurrency: params.Concurrency,
+		}, a.Config, os.Getenv, os.UserHomeDir)
+		if err != nil {
+			return nil, err
+		}
+		// 明示されたリポジトリ名の実在検証は app/create 内の 1 箇所で行われる
+		//（未知の名前はエラー）。CLI の --repo と同じ経路である。
+		return a.Create(ctx, act)
+	}, render.Create)
 }
 
 func actionWorktreeList(ctx context.Context, _ NoParams) (*tree.ListResult, string, error) {
-	t, err := newToolApp()
-	if err != nil {
-		return nil, "", err
-	}
-	res, runErr := t.app.List(ctx)
-	if res != nil {
-		render.List(&t.buf, res)
-	}
-	return res, t.text(), runErr
+	return run(func(a *app.App) (*tree.ListResult, error) {
+		return a.List(ctx)
+	}, render.List)
 }
 
 func actionWorktreeRemove(ctx context.Context, params WorktreeRemoveParams) (*tree.RemoveResult, string, error) {
@@ -109,17 +109,11 @@ func actionWorktreeRemove(ctx context.Context, params WorktreeRemoveParams) (*tr
 	if err != nil {
 		return nil, "", err
 	}
-	t, err := newToolApp()
-	if err != nil {
-		return nil, "", err
-	}
-	// Force は常に false: dirty なチェックアウトの削除拒否（git の安全弁）を MCP から
-	// 上書きする経路は存在しない。
-	res, runErr := t.app.Remove(ctx, action.Remove{Name: name, KeepBranch: params.KeepBranch})
-	if res != nil {
-		render.Remove(&t.buf, res)
-	}
-	return res, t.text(), runErr
+	return run(func(a *app.App) (*tree.RemoveResult, error) {
+		// Force は常に false: dirty なチェックアウトの削除拒否（git の安全弁）を MCP から
+		// 上書きする経路は存在しない。
+		return a.Remove(ctx, action.Remove{Name: name, KeepBranch: params.KeepBranch})
+	}, render.Remove)
 }
 
 func actionServerSwitch(ctx context.Context, params ServerSwitchParams) (*server.SwitchResult, string, error) {
@@ -127,31 +121,27 @@ func actionServerSwitch(ctx context.Context, params ServerSwitchParams) (*server
 	if err != nil {
 		return nil, "", err
 	}
-	t, cmd, err := serverCommand(params.Repos)
-	if err != nil {
-		return nil, "", err
-	}
-	res, runErr := t.app.ServerSwitch(ctx, cmd, action.SwitchKind{
-		Name:            name,
-		RequireWorktree: params.RequireWorktree,
-		Restart:         params.Restart,
-	})
-	if res != nil {
-		render.Switch(&t.buf, res)
-	}
-	return res, t.text(), runErr
+	return run(func(a *app.App) (*server.SwitchResult, error) {
+		cmd, err := serverCommand(a, params.Repos)
+		if err != nil {
+			return nil, err
+		}
+		return a.ServerSwitch(ctx, cmd, action.SwitchKind{
+			Name:            name,
+			RequireWorktree: params.RequireWorktree,
+			Restart:         params.Restart,
+		})
+	}, render.Switch)
 }
 
 func actionServerStatus(ctx context.Context, params ServerScopeParams) (*server.StatusResult, string, error) {
-	t, cmd, err := serverCommand(params.Repos)
-	if err != nil {
-		return nil, "", err
-	}
-	res, runErr := t.app.ServerStatus(ctx, cmd)
-	if res != nil {
-		render.Status(&t.buf, res)
-	}
-	return res, t.text(), runErr
+	return run(func(a *app.App) (*server.StatusResult, error) {
+		cmd, err := serverCommand(a, params.Repos)
+		if err != nil {
+			return nil, err
+		}
+		return a.ServerStatus(ctx, cmd)
+	}, render.Status)
 }
 
 func actionServerStop(ctx context.Context, params ServerStopParams) (*server.StopResult, string, error) {
@@ -159,15 +149,13 @@ func actionServerStop(ctx context.Context, params ServerStopParams) (*server.Sto
 	if err != nil {
 		return nil, "", err
 	}
-	t, cmd, err := serverCommand(params.Repos)
-	if err != nil {
-		return nil, "", err
-	}
-	res, runErr := t.app.ServerStop(ctx, cmd, action.StopKind{Scope: scope})
-	if res != nil {
-		render.Stop(&t.buf, res)
-	}
-	return res, t.text(), runErr
+	return run(func(a *app.App) (*server.StopResult, error) {
+		cmd, err := serverCommand(a, params.Repos)
+		if err != nil {
+			return nil, err
+		}
+		return a.ServerStop(ctx, cmd, action.StopKind{Scope: scope})
+	}, render.Stop)
 }
 
 func actionServerLogs(ctx context.Context, params ServerLogsParams) (*server.LogsResult, string, error) {
@@ -175,21 +163,19 @@ func actionServerLogs(ctx context.Context, params ServerLogsParams) (*server.Log
 	if err != nil {
 		return nil, "", err
 	}
-	t, cmd, err := serverCommand(params.Repos)
-	if err != nil {
-		return nil, "", err
-	}
-	// フォロー（tail -f）は action.LogsKind に存在しないため、MCP から到達する
-	// 経路は型レベルで存在しない。
-	res, runErr := t.app.ServerLogs(ctx, cmd, action.LogsKind{
-		Scope: scope,
-		Lines: clampLines(params.Lines),
-		Prev:  params.Prev,
-	})
-	if res != nil {
-		render.Logs(&t.buf, res)
-	}
-	return res, t.text(), runErr
+	return run(func(a *app.App) (*server.LogsResult, error) {
+		cmd, err := serverCommand(a, params.Repos)
+		if err != nil {
+			return nil, err
+		}
+		// フォロー（tail -f）は action.LogsKind に存在しないため、MCP から到達する
+		// 経路は型レベルで存在しない。
+		return a.ServerLogs(ctx, cmd, action.LogsKind{
+			Scope: scope,
+			Lines: clampLines(params.Lines),
+			Prev:  params.Prev,
+		})
+	}, render.Logs)
 }
 
 func actionAliasSet(ctx context.Context, params AliasSetParams) (string, error) {
@@ -210,16 +196,9 @@ func actionAliasSet(ctx context.Context, params AliasSetParams) (string, error) 
 }
 
 func actionAliasList(ctx context.Context, _ NoParams) (*app.AliasesResult, string, error) {
-	t, err := newToolApp()
-	if err != nil {
-		return nil, "", err
-	}
-	res, err := t.app.AliasList(ctx)
-	if err != nil {
-		return nil, "", err
-	}
-	render.Aliases(&t.buf, res)
-	return res, t.text(), nil
+	return run(func(a *app.App) (*app.AliasesResult, error) {
+		return a.AliasList(ctx)
+	}, render.Aliases)
 }
 
 func actionAliasRemove(ctx context.Context, params AliasNameParams) (string, error) {
@@ -239,15 +218,8 @@ func actionAliasRemove(ctx context.Context, params AliasNameParams) (string, err
 	return t.text(), nil
 }
 
-// serverCommand は server 系ツール共通の App とコマンドコンテキストを構築する。
-func serverCommand(repos []string) (*toolApp, action.ServerCommand, error) {
-	t, err := newToolApp()
-	if err != nil {
-		return nil, action.ServerCommand{}, err
-	}
-	cmd, err := action.NewServerCommand(action.Overrides{}, t.app.Config, os.Getenv, os.UserHomeDir, repos)
-	if err != nil {
-		return nil, action.ServerCommand{}, err
-	}
-	return t, cmd, nil
+// serverCommand は server 系ツール共通のコマンドコンテキストを、ビルド済みの App の
+// 設定から構築する。
+func serverCommand(a *app.App, repos []string) (action.ServerCommand, error) {
+	return action.NewServerCommand(action.Overrides{}, a.Config, os.Getenv, os.UserHomeDir, repos)
 }

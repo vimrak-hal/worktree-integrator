@@ -252,3 +252,40 @@ func TestLogsEmpty(t *testing.T) {
 		t.Fatalf("got %q", buf.String())
 	}
 }
+
+// FollowHeader は各ログのパス行（欠落は「ログがありません」）を書き出し、追跡できる
+// パスの一覧を返す。追跡対象が無ければ案内を書いて空を返す（server logs -f の前段整形）。
+func TestFollowHeader(t *testing.T) {
+	t.Run("パスと欠落を書き分けて追跡対象を返す", func(t *testing.T) {
+		var buf bytes.Buffer
+		paths := FollowHeader(&buf, &server.LogsResult{Logs: []server.LogEntry{
+			{Repo: "app", Server: "backend", Path: "/logs/a.log"},
+			{Repo: "app", Server: "web", Path: "/logs/w.log", Missing: true},
+		}})
+		if len(paths) != 1 || paths[0] != "/logs/a.log" {
+			t.Fatalf("paths = %v", paths)
+		}
+		out := buf.String()
+		if !strings.Contains(out, "  [app/backend] /logs/a.log\n") {
+			t.Fatalf("パス行が無い: %q", out)
+		}
+		if !strings.Contains(out, "  [app/web] ログがありません (/logs/w.log)\n") {
+			t.Fatalf("欠落行が無い: %q", out)
+		}
+		if strings.Contains(out, "表示できるログがありません") {
+			t.Fatalf("追跡対象があるのに案内を出している: %q", out)
+		}
+	})
+	t.Run("追跡対象が無ければ案内を書いて空", func(t *testing.T) {
+		var buf bytes.Buffer
+		paths := FollowHeader(&buf, &server.LogsResult{Logs: []server.LogEntry{
+			{Repo: "app", Server: "web", Path: "/logs/w.log", Missing: true},
+		}})
+		if len(paths) != 0 {
+			t.Fatalf("paths = %v", paths)
+		}
+		if !strings.Contains(buf.String(), "表示できるログがありません") {
+			t.Fatalf("案内が無い: %q", buf.String())
+		}
+	})
+}
