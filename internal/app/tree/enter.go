@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
-	"github.com/vimrak-hal/worktree-integrator/internal/app/create"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/hooks"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/wtenv"
 )
@@ -18,7 +17,7 @@ type EnterResult struct {
 	// Root は worktree のルートディレクトリ。
 	Root string `json:"root"`
 	// Hooks は実行された after フックの結果。
-	Hooks []create.HookOutcome `json:"hooks,omitempty"`
+	Hooks []hooks.Report `json:"hooks,omitempty"`
 }
 
 // Enter は既存の worktree への遷移を表す明示コマンドである: ルートの存在を検証し、
@@ -37,7 +36,7 @@ func Enter(ctx context.Context, d Deps, name action.Name) (*EnterResult, error) 
 	runCtx := wtenv.NewRunContext(name.String(), d.ReposDir, d.WorktreesDir)
 	res := &EnterResult{Worktree: name.String(), Root: runCtx.Root}
 	after := hooks.Run(ctx, d.Config.Hooks.After, runCtx, d.ChildIO)
-	res.Hooks = create.HookOutcomes("after", after)
+	res.Hooks = hooks.Reports("after", after)
 	if hooks.AnyFatal(after) {
 		return res, hooks.ErrFailed
 	}

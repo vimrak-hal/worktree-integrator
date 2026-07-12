@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vimrak-hal/worktree-integrator/internal/app/create"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/server"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/tree"
+	"github.com/vimrak-hal/worktree-integrator/internal/core/hooks"
 )
 
 // list テーブル: 別名・リポジトリ・稼働サーバーが列に並び、壊れた worktree には
@@ -66,7 +66,7 @@ func TestListEmptyAndNoBrokenHint(t *testing.T) {
 func TestEnterRendering(t *testing.T) {
 	var buf bytes.Buffer
 	Enter(&buf, &tree.EnterResult{Worktree: "feat", Root: "/wt/feat",
-		Hooks: []create.HookOutcome{{Timing: "after", Name: "nav", Status: create.HookSucceeded}}})
+		Hooks: []hooks.Report{{Timing: "after", Name: "nav", Status: hooks.ReportSucceeded}}})
 	out := buf.String()
 	if !strings.Contains(out, "✓ hook nav 完了") ||
 		!strings.Contains(out, `worktree "feat" に入りました（/wt/feat）`) {
@@ -75,7 +75,7 @@ func TestEnterRendering(t *testing.T) {
 
 	buf.Reset()
 	Enter(&buf, &tree.EnterResult{Worktree: "feat", Root: "/wt/feat",
-		Hooks: []create.HookOutcome{{Timing: "after", Name: "nav", Status: create.HookFailed, Detail: "boom"}}})
+		Hooks: []hooks.Report{{Timing: "after", Name: "nav", Status: hooks.ReportFailed, Detail: "boom"}}})
 	if strings.Contains(buf.String(), "入りました") {
 		t.Fatalf("failed hook must suppress the completion line: %q", buf.String())
 	}

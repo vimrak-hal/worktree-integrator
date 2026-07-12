@@ -317,7 +317,7 @@ func TestBeforeHookFailureAborts(t *testing.T) {
 	if res == nil || res.Disposition != DispositionAborted {
 		t.Fatalf("res = %+v", res)
 	}
-	if len(res.Hooks) != 1 || res.Hooks[0].Status != HookFailed {
+	if len(res.Hooks) != 1 || res.Hooks[0].Status != hooks.ReportFailed {
 		t.Fatalf("hooks = %+v", res.Hooks)
 	}
 }

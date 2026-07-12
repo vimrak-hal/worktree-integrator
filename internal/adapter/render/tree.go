@@ -5,8 +5,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/vimrak-hal/worktree-integrator/internal/app/create"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/tree"
+	"github.com/vimrak-hal/worktree-integrator/internal/core/hooks"
 )
 
 // List は `list` のテーブル（WORKTREE / ALIAS / REPOS / SERVERS）を描画する。
@@ -73,7 +73,7 @@ func Enter(w io.Writer, res *tree.EnterResult) {
 	failed := false
 	for _, h := range res.Hooks {
 		fmt.Fprint(w, hookLine(h))
-		failed = failed || h.Status == create.HookFailed
+		failed = failed || h.Status == hooks.ReportFailed
 	}
 	if !failed {
 		fmt.Fprintf(w, "worktree %q に入りました（%s）\n", res.Worktree, res.Root)

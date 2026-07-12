@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/server"
 	corealias "github.com/vimrak-hal/worktree-integrator/internal/core/alias"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/config"
@@ -33,15 +32,6 @@ func newDeps(t *testing.T, proc coreserver.ProcessControl, cfg *config.File, rep
 		ReposDir:     reposDir,
 		WorktreesDir: worktreesDir,
 	}
-}
-
-func mustName(t *testing.T, raw string) action.Name {
-	t.Helper()
-	n, err := action.ParseName(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return n
 }
 
 // addWorktree は repoPath から target へ branch の連結ワークツリーを作る。

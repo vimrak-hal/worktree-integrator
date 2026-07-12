@@ -27,7 +27,7 @@ type Result struct {
 	// Repos はリポジトリごとの結果（作成を実行した場合のみ）。
 	Repos []RepoOutcome `json:"repos,omitempty"`
 	// Hooks は実行されたライフサイクルフックの結果（実行順）。
-	Hooks []HookOutcome `json:"hooks,omitempty"`
+	Hooks []hooks.Report `json:"hooks,omitempty"`
 	// Created / Skipped / Failed は Repos の集計。
 	Created int `json:"created"`
 	Skipped int `json:"skipped"`
@@ -91,23 +91,6 @@ type CopyFailure struct {
 	Error string `json:"error"`
 }
 
-// HookOutcome は 1 つのフックの結果の JSON 表現。
-type HookOutcome struct {
-	// Timing は "before" | "after_worktree" | "after"。
-	Timing string `json:"timing"`
-	Name   string `json:"name"`
-	// Status は "succeeded" | "warned" | "failed"。
-	Status string `json:"status"`
-	Detail string `json:"detail,omitempty"`
-}
-
-// HookOutcome.Status の語彙。
-const (
-	HookSucceeded = "succeeded"
-	HookWarned    = "warned"
-	HookFailed    = "failed"
-)
-
 // statusID は worktree.Status を JSON の語彙へ写す。封印された列挙のため、未知の
 // 値はバグでありパニックさせる。
 func statusID(s worktree.Status) string {
@@ -151,39 +134,10 @@ func StageID(s worktree.Stage) string {
 	}
 }
 
-// hookStatusID は hooks.Status を JSON の語彙へ写す。
-func hookStatusID(s hooks.Status) string {
-	switch s {
-	case hooks.StatusSucceeded:
-		return HookSucceeded
-	case hooks.StatusWarned:
-		return HookWarned
-	case hooks.StatusFailed:
-		return HookFailed
-	default:
-		panic(fmt.Sprintf("unknown hooks.Status %d", s))
-	}
-}
-
-// HookOutcomes は 1 タイミング分のフック結果を JSON 表現へ写す。フック結果の語彙
-// （HookOutcome）は create が所有するが、after フックだけを実行する enter
-// ワークフロー（app/tree）も同じ語彙で報告するため公開されている。
-func HookOutcomes(timing string, outcomes []hooks.Outcome) []HookOutcome {
-	out := make([]HookOutcome, 0, len(outcomes))
-	for _, o := range outcomes {
-		out = append(out, HookOutcome{
-			Timing: timing,
-			Name:   o.Name,
-			Status: hookStatusID(o.Status),
-			Detail: o.Detail,
-		})
-	}
-	return out
-}
-
-// appendHookOutcomes は 1 タイミング分のフック結果を JSON 表現に写して追記する。
-func appendHookOutcomes(dst []HookOutcome, timing string, outcomes []hooks.Outcome) []HookOutcome {
-	return append(dst, HookOutcomes(timing, outcomes)...)
+// appendHookOutcomes は 1 タイミング分のフック結果を表示・シリアライズ用の Report に
+// 写して追記する。表示語彙（hooks.Report）は core/hooks が所有する。
+func appendHookOutcomes(dst []hooks.Report, timing string, outcomes []hooks.Outcome) []hooks.Report {
+	return append(dst, hooks.Reports(timing, outcomes)...)
 }
 
 // copyReportDTO は fscopy.Report を JSON 表現へ写す。nil レポート（コピー設定なし）は

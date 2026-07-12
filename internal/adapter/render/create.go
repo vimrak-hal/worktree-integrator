@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/app/create"
+	"github.com/vimrak-hal/worktree-integrator/internal/core/hooks"
 )
 
 // Create は create ワークフローの結果を描画する。ライブの途中経過（Progress）は
@@ -70,7 +71,7 @@ func Create(w io.Writer, res *create.Result) {
 // hookGroup は 1 つのタイミングのフック結果を、件数付きのヘッダーに続けて 1 行ずつ
 // 書き出す。そのタイミングの結果が無ければ何も書き出さない。
 func hookGroup(w io.Writer, res *create.Result, timing string) {
-	var group []create.HookOutcome
+	var group []hooks.Report
 	for _, h := range res.Hooks {
 		if h.Timing == timing {
 			group = append(group, h)
@@ -91,13 +92,13 @@ func hookGroup(w io.Writer, res *create.Result, timing string) {
 
 // hookLine は 1 つのフック結果を記号付きの 1 行に整形する。Status は閉じた語彙の
 // ため、未知の値はバグでありパニックさせる。
-func hookLine(h create.HookOutcome) string {
+func hookLine(h hooks.Report) string {
 	switch h.Status {
-	case create.HookSucceeded:
+	case hooks.ReportSucceeded:
 		return fmt.Sprintf("  ✓ hook %s 完了\n", h.Name)
-	case create.HookWarned:
+	case hooks.ReportWarned:
 		return fmt.Sprintf("  ! hook %s 失敗（許容）: %s\n", h.Name, h.Detail)
-	case create.HookFailed:
+	case hooks.ReportFailed:
 		return fmt.Sprintf("  ✗ hook %s 失敗: %s\n", h.Name, h.Detail)
 	default:
 		panic(fmt.Sprintf("unknown hook status %q", h.Status))

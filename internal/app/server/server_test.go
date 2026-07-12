@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
+	"github.com/vimrak-hal/worktree-integrator/internal/app/action/actiontest"
 	corealias "github.com/vimrak-hal/worktree-integrator/internal/core/alias"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/cmdspec"
 	coreserver "github.com/vimrak-hal/worktree-integrator/internal/core/server"
@@ -31,15 +32,6 @@ func newEnv(t *testing.T, worktreeNames ...string) *env {
 		}
 	}
 	return e
-}
-
-func name(t *testing.T, raw string) action.Name {
-	t.Helper()
-	n, err := action.ParseName(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return n
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -73,7 +65,7 @@ func (e *env) cmd() action.ServerCommand {
 
 func (e *env) switchTo(t *testing.T, proc coreserver.ProcessControl, wt string) *SwitchResult {
 	t.Helper()
-	res, err := Switch(t.Context(), e.deps(proc), e.cmd(), action.SwitchKind{Name: name(t, wt)})
+	res, err := Switch(t.Context(), e.deps(proc), e.cmd(), action.SwitchKind{Name: actiontest.MustName(t, wt)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +137,7 @@ func TestMissingWorktreeSkippedByDefault(t *testing.T) {
 func TestRequireWorktreeErrorsOnMissing(t *testing.T) {
 	e := newEnv(t)
 	_, err := Switch(t.Context(), e.deps(serverfake.New()), e.cmd(),
-		action.SwitchKind{Name: name(t, "feat-a"), RequireWorktree: true})
+		action.SwitchKind{Name: actiontest.MustName(t, "feat-a"), RequireWorktree: true})
 	if err == nil || !strings.Contains(err.Error(), "worktree が見つかりません") {
 		t.Fatalf("err = %v", err)
 	}
@@ -215,7 +207,7 @@ func TestPartialFailureLeavesMixedWorktrees(t *testing.T) {
 
 	// 以降のフォアグラウンドコマンドは失敗する → frontend の feat-b setup が失敗。
 	proc.FailForeground()
-	res, err := Switch(t.Context(), e.deps(proc), e.cmd(), action.SwitchKind{Name: name(t, "feat-b")})
+	res, err := Switch(t.Context(), e.deps(proc), e.cmd(), action.SwitchKind{Name: actiontest.MustName(t, "feat-b")})
 	if err == nil || !strings.Contains(err.Error(), "1 件のサーバー操作に失敗しました") {
 		t.Fatalf("switch err = %v", err)
 	}
@@ -267,9 +259,9 @@ func TestStopOneWorktreeStopsOnlyMatchingServers(t *testing.T) {
 	proc := serverfake.New()
 	e.switchTo(t, proc, "feat-a")
 	proc.FailForeground()
-	_, _ = Switch(t.Context(), e.deps(proc), e.cmd(), action.SwitchKind{Name: name(t, "feat-b")}) // backend→feat-b, frontend は feat-a のまま
+	_, _ = Switch(t.Context(), e.deps(proc), e.cmd(), action.SwitchKind{Name: actiontest.MustName(t, "feat-b")}) // backend→feat-b, frontend は feat-a のまま
 
-	res, err := Stop(t.Context(), e.deps(proc), e.cmd(), action.StopKind{Scope: action.OneWorktree{Name: name(t, "feat-a")}})
+	res, err := Stop(t.Context(), e.deps(proc), e.cmd(), action.StopKind{Scope: action.OneWorktree{Name: actiontest.MustName(t, "feat-a")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +353,7 @@ func TestLogsReadsNamedWorktreeLog(t *testing.T) {
 
 	cmd := e.cmd()
 	cmd.Repos = []string{"app"}
-	res, err := Logs(t.Context(), e.deps(proc), cmd, action.LogsKind{Scope: action.OneWorktree{Name: name(t, "feat-a")}, Lines: 50})
+	res, err := Logs(t.Context(), e.deps(proc), cmd, action.LogsKind{Scope: action.OneWorktree{Name: actiontest.MustName(t, "feat-a")}, Lines: 50})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +375,7 @@ func TestLogsZeroLinesResolvesPathsOnly(t *testing.T) {
 	writeLog(t, store.LogPath("app", "backend", "feat-a"), "should not be read\n")
 
 	res, err := Logs(t.Context(), e.deps(proc), e.cmd(),
-		action.LogsKind{Scope: action.OneWorktree{Name: name(t, "feat-a")}, Lines: 0})
+		action.LogsKind{Scope: action.OneWorktree{Name: actiontest.MustName(t, "feat-a")}, Lines: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -413,7 +405,7 @@ func TestLogsPrevReadsRotatedGeneration(t *testing.T) {
 	writeLog(t, coreserver.PrevLogPath(current), "previous generation\n")
 
 	res, err := Logs(t.Context(), e.deps(proc), e.cmd(),
-		action.LogsKind{Scope: action.OneWorktree{Name: name(t, "feat-a")}, Lines: 50, Prev: true})
+		action.LogsKind{Scope: action.OneWorktree{Name: actiontest.MustName(t, "feat-a")}, Lines: 50, Prev: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +443,7 @@ func TestLogsFallsBackToLastLogWhenNotRunning(t *testing.T) {
 func TestLogsNamedScopeReportsMissing(t *testing.T) {
 	e := newEnv(t, "feat-a")
 	res, err := Logs(t.Context(), e.deps(serverfake.New()), e.cmd(),
-		action.LogsKind{Scope: action.OneWorktree{Name: name(t, "feat-a")}, Lines: 50})
+		action.LogsKind{Scope: action.OneWorktree{Name: actiontest.MustName(t, "feat-a")}, Lines: 50})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -572,7 +564,7 @@ func TestConcurrentSwitchAndStopAreSerialized(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, errs[0] = Switch(t.Context(), e.deps(proc), e.cmd(), action.SwitchKind{Name: name(t, "feat-b")})
+		_, errs[0] = Switch(t.Context(), e.deps(proc), e.cmd(), action.SwitchKind{Name: actiontest.MustName(t, "feat-b")})
 	}()
 	go func() {
 		defer wg.Done()

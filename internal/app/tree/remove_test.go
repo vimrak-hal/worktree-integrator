@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
+	"github.com/vimrak-hal/worktree-integrator/internal/app/action/actiontest"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/cmdspec"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/config"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/git"
@@ -76,7 +77,7 @@ func TestRemoveCleansEverything(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := Remove(t.Context(), d, action.Remove{Name: mustName(t, "feat-x")})
+	res, err := Remove(t.Context(), d, action.Remove{Name: actiontest.MustName(t, "feat-x")})
 	if err != nil {
 		t.Fatalf("err = %v\nres = %+v", err, res)
 	}
@@ -141,7 +142,7 @@ func TestRemoveRefusesDirtyWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := Remove(t.Context(), d, action.Remove{Name: mustName(t, "feat-x")})
+	res, err := Remove(t.Context(), d, action.Remove{Name: actiontest.MustName(t, "feat-x")})
 	if err == nil {
 		t.Fatal("dirty removal should be an error")
 	}
@@ -163,7 +164,7 @@ func TestRemoveForceOverridesDirty(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := Remove(t.Context(), d, action.Remove{Name: mustName(t, "feat-x"), Force: true})
+	res, err := Remove(t.Context(), d, action.Remove{Name: actiontest.MustName(t, "feat-x"), Force: true})
 	if err != nil {
 		t.Fatalf("err = %v\nres = %+v", err, res)
 	}
@@ -179,7 +180,7 @@ func TestRemoveForceOverridesDirty(t *testing.T) {
 func TestRemoveKeepBranch(t *testing.T) {
 	d, repoA, _ := removeFixture(t, serverfake.New(), &config.File{})
 
-	res, err := Remove(t.Context(), d, action.Remove{Name: mustName(t, "feat-x"), KeepBranch: true})
+	res, err := Remove(t.Context(), d, action.Remove{Name: actiontest.MustName(t, "feat-x"), KeepBranch: true})
 	if err != nil {
 		t.Fatalf("err = %v\nres = %+v", err, res)
 	}
@@ -212,7 +213,7 @@ func TestRemoveAbortsWhenStopFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := Remove(t.Context(), d, action.Remove{Name: mustName(t, "feat-x")})
+	res, err := Remove(t.Context(), d, action.Remove{Name: actiontest.MustName(t, "feat-x")})
 	if err == nil || !strings.Contains(err.Error(), "削除を中断") {
 		t.Fatalf("err = %v", err)
 	}
@@ -248,7 +249,7 @@ func TestRemoveNestedNameCleansEmptyParents(t *testing.T) {
 	addWorktree(t, repoA, "feature/signup", filepath.Join(worktreesDir, "feature", "signup", "repo-a"))
 	d := newDeps(t, serverfake.New(), &config.File{}, reposDir, worktreesDir)
 
-	res, err := Remove(t.Context(), d, action.Remove{Name: mustName(t, "feature/login")})
+	res, err := Remove(t.Context(), d, action.Remove{Name: actiontest.MustName(t, "feature/login")})
 	if err != nil {
 		t.Fatalf("err = %v\nres = %+v", err, res)
 	}
@@ -259,7 +260,7 @@ func TestRemoveNestedNameCleansEmptyParents(t *testing.T) {
 		t.Fatal("sibling worktree must survive")
 	}
 
-	if res, err := Remove(t.Context(), d, action.Remove{Name: mustName(t, "feature/signup")}); err != nil || !res.RootRemoved {
+	if res, err := Remove(t.Context(), d, action.Remove{Name: actiontest.MustName(t, "feature/signup")}); err != nil || !res.RootRemoved {
 		t.Fatalf("second remove: err=%v res=%+v", err, res)
 	}
 	// 兄弟も消えたので、空になった feature/ ごと片付く。
@@ -291,7 +292,7 @@ func TestRemoveErrorPreservesErrorType(t *testing.T) {
 // 存在しない worktree の削除はエラー。
 func TestRemoveMissingWorktreeIsError(t *testing.T) {
 	d := newDeps(t, serverfake.New(), &config.File{}, t.TempDir(), t.TempDir())
-	_, err := Remove(t.Context(), d, action.Remove{Name: mustName(t, "no-such")})
+	_, err := Remove(t.Context(), d, action.Remove{Name: actiontest.MustName(t, "no-such")})
 	if err == nil || !strings.Contains(err.Error(), `worktree "no-such" がありません`) {
 		t.Fatalf("err = %v", err)
 	}
@@ -307,7 +308,7 @@ func TestRemoveBrokenCheckout(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := Remove(t.Context(), d, action.Remove{Name: mustName(t, "feat-x")})
+	res, err := Remove(t.Context(), d, action.Remove{Name: actiontest.MustName(t, "feat-x")})
 	if err != nil {
 		t.Fatalf("err = %v\nres = %+v", err, res)
 	}

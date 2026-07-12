@@ -5,16 +5,6 @@ import (
 	"testing"
 )
 
-// mustName はテスト用に検証済みの Name を構築する。
-func mustName(t *testing.T, raw string) Name {
-	t.Helper()
-	n, err := ParseName(raw)
-	if err != nil {
-		t.Fatalf("ParseName(%q) = %v", raw, err)
-	}
-	return n
-}
-
 // ParseName は git check-ref-format 準拠に緩和された規則で名前を受理する。
 // 旧 ValidateName では拒否されていた '_' と '.'（feat_login / v1.2）が合法になった
 // ことを含めて固定する（意図的な仕様変更）。
@@ -104,7 +94,10 @@ func TestValidateRepoName(t *testing.T) {
 
 // Name はゼロ値で空文字列を返すが、ParseName 経由では決して空にならない。
 func TestNameStringRoundTrip(t *testing.T) {
-	n := mustName(t, "feature/login")
+	n, err := ParseName("feature/login")
+	if err != nil {
+		t.Fatalf("ParseName: %v", err)
+	}
 	if n.String() != "feature/login" {
 		t.Fatalf("String() = %q", n.String())
 	}

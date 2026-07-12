@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/app/create"
+	"github.com/vimrak-hal/worktree-integrator/internal/core/hooks"
 )
 
 func TestCreateSummaryGroupsRepos(t *testing.T) {
@@ -87,7 +88,7 @@ func TestCreateDispositions(t *testing.T) {
 		var buf bytes.Buffer
 		Create(&buf, &create.Result{
 			Worktree: "feat", Root: "/wt/feat", Disposition: create.DispositionNothingToAdd,
-			Hooks: []create.HookOutcome{{Timing: "after", Name: "nav", Status: create.HookSucceeded}},
+			Hooks: []hooks.Report{{Timing: "after", Name: "nav", Status: hooks.ReportSucceeded}},
 		})
 		if !strings.Contains(buf.String(), "追加するリポジトリはありません") {
 			t.Fatalf("out = %q", buf.String())
@@ -118,10 +119,10 @@ func TestCreateHookGroups(t *testing.T) {
 	res := &create.Result{
 		Disposition: create.DispositionCreated,
 		Created:     2,
-		Hooks: []create.HookOutcome{
-			{Timing: "before", Name: "ok", Status: create.HookSucceeded},
-			{Timing: "after_worktree", Name: "warn", Status: create.HookWarned, Detail: "exit 1"},
-			{Timing: "after", Name: "boom", Status: create.HookFailed, Detail: "no such file"},
+		Hooks: []hooks.Report{
+			{Timing: "before", Name: "ok", Status: hooks.ReportSucceeded},
+			{Timing: "after_worktree", Name: "warn", Status: hooks.ReportWarned, Detail: "exit 1"},
+			{Timing: "after", Name: "boom", Status: hooks.ReportFailed, Detail: "no such file"},
 		},
 	}
 	var buf bytes.Buffer

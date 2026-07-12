@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vimrak-hal/worktree-integrator/internal/app/action/actiontest"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/cmdspec"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/config"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/hooks"
@@ -36,7 +37,7 @@ func TestEnterRunsOnlyAfterHooks(t *testing.T) {
 	cfg := &config.File{Hooks: hooksWithMarkers(markers)}
 	d := newDeps(t, serverfake.New(), cfg, t.TempDir(), worktreesDir)
 
-	res, err := Enter(t.Context(), d, mustName(t, "feat-x"))
+	res, err := Enter(t.Context(), d, actiontest.MustName(t, "feat-x"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +63,7 @@ func TestEnterMissingWorktreeIsError(t *testing.T) {
 	cfg := &config.File{Hooks: hooksWithMarkers(markers)}
 	d := newDeps(t, serverfake.New(), cfg, t.TempDir(), t.TempDir())
 
-	res, err := Enter(t.Context(), d, mustName(t, "no-such"))
+	res, err := Enter(t.Context(), d, actiontest.MustName(t, "no-such"))
 	if err == nil || !strings.Contains(err.Error(), `worktree "no-such" がありません`) {
 		t.Fatalf("err = %v", err)
 	}
@@ -85,7 +86,7 @@ func TestEnterAfterHookFailureIsError(t *testing.T) {
 	}}
 	d := newDeps(t, serverfake.New(), cfg, t.TempDir(), worktreesDir)
 
-	res, err := Enter(t.Context(), d, mustName(t, "feat-x"))
+	res, err := Enter(t.Context(), d, actiontest.MustName(t, "feat-x"))
 	if !errors.Is(err, hooks.ErrFailed) {
 		t.Fatalf("failing after hook should surface as hooks.ErrFailed, got %v", err)
 	}

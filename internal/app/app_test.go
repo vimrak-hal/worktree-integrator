@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
+	"github.com/vimrak-hal/worktree-integrator/internal/app/action/actiontest"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/config"
 	coreserver "github.com/vimrak-hal/worktree-integrator/internal/core/server"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/server/serverfake"
@@ -26,20 +27,11 @@ func newApp(t *testing.T) *App {
 	return a
 }
 
-func mustName(t *testing.T, raw string) action.Name {
-	t.Helper()
-	n, err := action.ParseName(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return n
-}
-
 // alias 系メソッドの往復: set → list → remove が Result / 戻り値で観測できる。
 func TestAliasMethodsRoundTrip(t *testing.T) {
 	a := newApp(t)
 
-	stored, err := a.AliasSet(t.Context(), mustName(t, "feat-a"), "  ABC-123: title \n2行目は落ちる")
+	stored, err := a.AliasSet(t.Context(), actiontest.MustName(t, "feat-a"), "  ABC-123: title \n2行目は落ちる")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +51,7 @@ func TestAliasMethodsRoundTrip(t *testing.T) {
 		t.Fatalf("sorted names = %v", names)
 	}
 
-	existed, err := a.AliasRemove(t.Context(), mustName(t, "feat-a"))
+	existed, err := a.AliasRemove(t.Context(), actiontest.MustName(t, "feat-a"))
 	if err != nil || !existed {
 		t.Fatalf("remove = %v, %v", existed, err)
 	}
