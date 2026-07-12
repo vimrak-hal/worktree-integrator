@@ -1,6 +1,6 @@
-// Package action は解決済みのコマンド語彙を保持する。すなわち、ユーザーが要求した
-// 内容を検証し完全に解決した表現と、フロントエンドのオーバーライドおよび設定ファイルから
-// それへの解決処理である（resolve.go を参照）。
+// Package action は解決済みコマンドの語彙と、その解決処理を保持する。すなわち、
+// ユーザーが要求した内容を検証し完全に解決した表現（この語彙）と、フロントエンドの
+// オーバーライドおよび設定ファイルからそれへの解決処理である（resolve.go を参照）。
 //
 // 各フロントエンドは生の入力を Overrides に変換し、ここのコンストラクタを呼び出す。
 // パッケージ cli はコマンドラインフラグから、パッケージ mcpserver はツール呼び出しの
@@ -8,10 +8,14 @@
 // 両方を1つの中立的なパッケージにまとめることで、どちらのフロントエンドももう一方に
 // 依存する必要がなくなる。
 //
+// ディスパッチはこの語彙を横断する単一のインターフェースではなく、cli.Invocation の
+// 型スイッチ（main）と、それが振り分ける App の型付きメソッド（Create / Remove /
+// ServerSwitch / AliasSet など）が行う。server / alias のように 1 つの起動要求が複数の
+// 操作を束ねるものだけは、ServerKind / AliasKind の封印された sum-type で網羅性を型に
+// 守らせる。
+//
 // worktree 名はすべて Name 型（name.go）で表現される。Name は ParseName でのみ
-// 構築できるため、この語彙に「未検証の名前」が入り込む余地はない。全バリアントは
-// 値レシーバで isAction を実装し、型スイッチのケース漏れ（ポインタと値の取り違え）を
-// 誘発しない。
+// 構築できるため、この語彙に「未検証の名前」が入り込む余地はない。
 package action
 
 import (
@@ -19,21 +23,6 @@ import (
 	"github.com/vimrak-hal/worktree-integrator/internal/core/hooks"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/server"
 )
-
-// Action はユーザーが要求した解決済みのコマンドである。これは閉じた集合であり、
-// 実装は以下の解決済みコマンド型のみで、非公開のマーカーメソッドによって封印されている。
-// そのため main やパッケージ app の型スイッチはすべてのケースを網羅する。
-// フロントエンドのオーバーライドおよび設定ファイルからの解決処理は resolve.go にある。
-type Action interface {
-	isAction()
-}
-
-func (Create) isAction()        {}
-func (Remove) isAction()        {}
-func (ServerCommand) isAction() {}
-func (AliasSet) isAction()      {}
-func (AliasList) isAction()     {}
-func (AliasRemove) isAction()   {}
 
 // Remove は worktree 削除の解決済みコマンドである（`remove <name>`）。ディレクトリの
 // 解決は App が設定・環境変数から行うため、ここには削除の意図だけを持つ。
@@ -180,10 +169,10 @@ func (AllWorktrees) isScope() {}
 func (OneWorktree) isScope()  {}
 
 // AliasKind は alias 操作を表す封印された sum-type である。実装は以下の 3 つの操作型
-// のみで、非公開のマーカーメソッドによって封印されている。各操作は Action を直接
-// 実装するため（旧 AliasCommand ラッパは廃止）、app の型スイッチにそのまま乗る。
+// のみで、非公開のマーカーメソッドによって封印されている。各操作は cli.Alias.Kind に
+// 載って main の型スイッチに渡り、対応する App メソッド（AliasSet / AliasList /
+// AliasRemove）へ振り分けられる（旧 AliasCommand ラッパは廃止）。
 type AliasKind interface {
-	Action
 	isAliasKind()
 }
 

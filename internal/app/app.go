@@ -93,11 +93,11 @@ func (a *App) Create(ctx context.Context, act action.Create) (*create.Result, er
 // WT_* 環境変数）はここで行う。返される取得関数は serverDeps と同じ LegacyBackup の
 // 通知である。
 func (a *App) treeDeps() (tree.Deps, func() string, error) {
-	reposDir, err := action.ReposDir("", a.Config, os.Getenv)
+	reposDir, err := action.ReposDir("", a.Config, os.Getenv, os.UserHomeDir)
 	if err != nil {
 		return tree.Deps{}, nil, err
 	}
-	worktreesDir, err := action.WorktreesDir("", a.Config, os.Getenv)
+	worktreesDir, err := action.WorktreesDir("", a.Config, os.Getenv, os.UserHomeDir)
 	if err != nil {
 		return tree.Deps{}, nil, err
 	}
@@ -284,7 +284,7 @@ type RepoInfo struct {
 // 環境変数（WT_REPOS_DIR）から解決する（このメソッドは解決済みアクションを取らない
 // ため、環境変数の参照だけはここで行う）。
 func (a *App) ListRepos(ctx context.Context) (*ReposResult, error) {
-	dir, err := action.ReposDir("", a.Config, os.Getenv)
+	dir, err := action.ReposDir("", a.Config, os.Getenv, os.UserHomeDir)
 	if err != nil {
 		return nil, err
 	}

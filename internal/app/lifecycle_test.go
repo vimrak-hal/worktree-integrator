@@ -60,7 +60,7 @@ func ptrCommands(s string) *cmdspec.Commands {
 // createFeatX は repo-a に feat-x worktree を作成する。
 func createFeatX(t *testing.T, a *App) {
 	t.Helper()
-	act, err := action.NewCreate("feat-x", []string{"repo-a"}, false, "", action.Overrides{}, a.Config, noEnv)
+	act, err := action.NewCreate("feat-x", []string{"repo-a"}, false, "", action.Overrides{}, a.Config, noEnv, os.UserHomeDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func createFeatX(t *testing.T, a *App) {
 // switchFeatX は feat-x へサーバーを切り替える。
 func switchFeatX(t *testing.T, a *App) {
 	t.Helper()
-	cmd, err := action.NewServerCommand(action.Overrides{}, a.Config, noEnv, nil)
+	cmd, err := action.NewServerCommand(action.Overrides{}, a.Config, noEnv, os.UserHomeDir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

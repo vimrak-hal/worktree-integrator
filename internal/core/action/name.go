@@ -3,6 +3,8 @@ package action
 import (
 	"fmt"
 	"strings"
+
+	"github.com/vimrak-hal/worktree-integrator/internal/core/config"
 )
 
 // Name は検証済みの worktree 名（＝ブランチ名＝worktrees_dir 直下の相対パス）である。
@@ -46,6 +48,41 @@ func validateRepoName(name string) error {
 		return fmt.Errorf("リポジトリ名 %q が不正です: \"/\" は使えません", name)
 	}
 	return validateSegment("リポジトリ名", name, name)
+}
+
+// validateBase は base ブランチ指定が安全かを検証する。リテラル "auto"
+// （config.DefaultBase。リモートの symbolic-ref → main → master で自動解決する
+// センチネル）は常に許可し、それ以外は worktree 名と同じセグメント規則を "/" 区切りの
+// 各セグメントに適用する。base は最終的に git fetch の位置引数（ブランチ名）として
+// リモートへ渡るため、先頭 '-' のオプション化や制御文字の混入を型の手前で塞ぐ。空文字は
+// 拒否する（呼び出し側は「未指定」を空文字で表すため、検証にかける前に自分で除外する）。
+func validateBase(base string) error {
+	if base == config.DefaultBase {
+		return nil
+	}
+	if base == "" {
+		return fmt.Errorf("base が空です")
+	}
+	for seg := range strings.SplitSeq(base, "/") {
+		if err := validateSegment("base", base, seg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateRemote は remote 名が安全かを検証する。remote は git fetch の位置引数として
+// そのまま渡るため、単一セグメントとして worktree 名と同じ規則を適用し、"/" を含む名前と
+// 空文字を拒否する。先頭 '-' の混入は "--upload-pack=<cmd>" のような任意コマンド実行への
+// 入り口になりうるため、ここで塞ぐ。
+func validateRemote(remote string) error {
+	if remote == "" {
+		return fmt.Errorf("remote が空です")
+	}
+	if strings.ContainsRune(remote, '/') {
+		return fmt.Errorf("remote %q が不正です: \"/\" は使えません", remote)
+	}
+	return validateSegment("remote", remote, remote)
 }
 
 // validateSegment は 1 つのパスセグメントを検証し、違反時には「何が違反か」を具体的に

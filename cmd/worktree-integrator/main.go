@@ -127,7 +127,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 func dispatch(ctx context.Context, a *app.App, inv cli.Invocation, stdout io.Writer) error {
 	switch v := inv.(type) {
 	case cli.Create:
-		act, err := action.NewCreate(v.Name, v.Repos, v.All, v.Base, v.Ov, a.Config, os.Getenv)
+		act, err := action.NewCreate(v.Name, v.Repos, v.All, v.Base, v.Ov, a.Config, os.Getenv, os.UserHomeDir)
 		if err != nil {
 			return err
 		}
@@ -184,7 +184,7 @@ func dispatch(ctx context.Context, a *app.App, inv cli.Invocation, stdout io.Wri
 		return nil
 
 	case cli.Server:
-		cmd, err := action.NewServerCommand(v.Ov, a.Config, os.Getenv, v.Repos)
+		cmd, err := action.NewServerCommand(v.Ov, a.Config, os.Getenv, os.UserHomeDir, v.Repos)
 		if err != nil {
 			return err
 		}

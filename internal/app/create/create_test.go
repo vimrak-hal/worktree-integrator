@@ -40,7 +40,7 @@ func cfgOf(t *testing.T, name, reposDir, worktreesDir string) action.Create {
 	t.Helper()
 	cfg, err := action.NewCreate(name, nil, false, "", action.Overrides{
 		ReposDir: reposDir, WorktreesDir: worktreesDir, Remote: "origin",
-	}, &config.File{}, noEnv)
+	}, &config.File{}, noEnv, os.UserHomeDir)
 	if err != nil {
 		t.Fatal(err)
 	}

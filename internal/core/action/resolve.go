@@ -2,7 +2,6 @@ package action
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 
@@ -19,8 +18,10 @@ import (
 //
 // 両方のフロントエンド（cli のフラグパーサと MCP のツール層）が Overrides を構築して
 // 以下のコンストラクタに渡すため、優先順位は各フロントエンドではなく1か所にまとまっている。
-// 環境変数は os.Getenv の直読みではなく getenv 関数として注入される（main / mcpserver が
-// os.Getenv を渡す）ため、解決処理は純関数でありテストは環境の差し替えを必要としない。
+// 環境変数は os.Getenv の直読みではなく getenv 関数として、ホームディレクトリは
+// os.UserHomeDir の直読みではなく home 関数として注入される（main / mcpserver が
+// os.Getenv・os.UserHomeDir を渡す）ため、解決処理は純関数でありテストは環境の差し替えを
+// 必要としない。
 type Overrides struct {
 	ReposDir     string
 	WorktreesDir string
@@ -31,21 +32,22 @@ type Overrides struct {
 
 // ReposDir はリポジトリのベースディレクトリを解決する
 // （フラグ > WT_REPOS_DIR > 設定ファイル > ~/repositories）。
-func ReposDir(override string, file *config.File, getenv func(string) string) (string, error) {
-	return resolveDir(override, getenv("WT_REPOS_DIR"), file.ReposDir, "repositories")
+func ReposDir(override string, file *config.File, getenv func(string) string, home func() (string, error)) (string, error) {
+	return resolveDir(override, getenv("WT_REPOS_DIR"), file.ReposDir, "repositories", home)
 }
 
 // WorktreesDir はworktreeのベースディレクトリを解決する
 // （フラグ > WT_WORKTREES_DIR > 設定ファイル > ~/worktrees）。
-func WorktreesDir(override string, file *config.File, getenv func(string) string) (string, error) {
-	return resolveDir(override, getenv("WT_WORKTREES_DIR"), file.WorktreesDir, "worktrees")
+func WorktreesDir(override string, file *config.File, getenv func(string) string, home func() (string, error)) (string, error) {
+	return resolveDir(override, getenv("WT_WORKTREES_DIR"), file.WorktreesDir, "worktrees", home)
 }
 
 // resolveDir はディレクトリ設定の 4 段の優先順位を 1 箇所で適用する。いずれの段も
 // 空でない値のみを採用する（空文字列 = 未指定）。デフォルトの ~/<defaultName> は
-// ホームディレクトリが特定できない場合にエラーとなる（旧実装の「相対パスへの静かな
-// フォールバック」はカレントディレクトリ依存の事故を招くため廃止した）。
-func resolveDir(override, env, fileValue, defaultName string) (string, error) {
+// home（os.UserHomeDir の注入）がホームディレクトリを特定できない場合にエラーとなる
+// （旧実装の「相対パスへの静かなフォールバック」はカレントディレクトリ依存の事故を
+// 招くため廃止した）。
+func resolveDir(override, env, fileValue, defaultName string, home func() (string, error)) (string, error) {
 	if override != "" {
 		return override, nil
 	}
@@ -55,11 +57,11 @@ func resolveDir(override, env, fileValue, defaultName string) (string, error) {
 	if fileValue != "" {
 		return fileValue, nil
 	}
-	home, err := os.UserHomeDir()
+	dir, err := home()
 	if err != nil {
 		return "", fmt.Errorf("既定のディレクトリ ~/%s を解決できません（ホームディレクトリを特定できません）: %w", defaultName, err)
 	}
-	return filepath.Join(home, defaultName), nil
+	return filepath.Join(dir, defaultName), nil
 }
 
 // remote は fetch 元のリモートを解決する
@@ -108,7 +110,7 @@ func concurrency(override int, file *config.File, getenv func(string) string) (i
 // --base フラグ / MCP の base パラメータで、空文字列は「未指定」（[repos.<name>].base
 // → [defaults].base → "auto" へフォールスルー。解決は Create.BaseFor がリポジトリごとに
 // 行う）を意味する。
-func NewCreate(name string, repos []string, all bool, base string, ov Overrides, file *config.File, getenv func(string) string) (Create, error) {
+func NewCreate(name string, repos []string, all bool, base string, ov Overrides, file *config.File, getenv func(string) string, home func() (string, error)) (Create, error) {
 	parsed, err := ParseName(name)
 	if err != nil {
 		return Create{}, err
@@ -121,11 +123,37 @@ func NewCreate(name string, repos []string, all bool, base string, ov Overrides,
 			return Create{}, err
 		}
 	}
-	reposDir, err := ReposDir(ov.ReposDir, file, getenv)
+	// base・remote は解決後に git fetch の位置引数（ブランチ名・リモート名）としてそのまま
+	// 渡るため、"--upload-pack=<cmd>" 等でのオプション混同・任意コマンド実行を型の手前で
+	// 塞ぐ。検証の入口はこのコンストラクタに一元化し、CLI も MCP も必ずここを通す。
+	// 空の base は「未指定」（BaseFor がリポジトリごとに解決する）を意味するため素通しし、
+	// 参照しうる全ソース（フラグ / [defaults].base / [repos.<name>].base）を検証する。
+	if base != "" {
+		if err := validateBase(base); err != nil {
+			return Create{}, err
+		}
+	}
+	if file.Defaults.Base != "" {
+		if err := validateBase(file.Defaults.Base); err != nil {
+			return Create{}, fmt.Errorf("[defaults].base: %w", err)
+		}
+	}
+	for repoName, rc := range file.Repos {
+		if rc.Base != "" {
+			if err := validateBase(rc.Base); err != nil {
+				return Create{}, fmt.Errorf("[repos.%s].base: %w", repoName, err)
+			}
+		}
+	}
+	resolvedRemote := remote(ov.Remote, file, getenv)
+	if err := validateRemote(resolvedRemote); err != nil {
+		return Create{}, err
+	}
+	reposDir, err := ReposDir(ov.ReposDir, file, getenv, home)
 	if err != nil {
 		return Create{}, err
 	}
-	worktreesDir, err := WorktreesDir(ov.WorktreesDir, file, getenv)
+	worktreesDir, err := WorktreesDir(ov.WorktreesDir, file, getenv, home)
 	if err != nil {
 		return Create{}, err
 	}
@@ -139,7 +167,7 @@ func NewCreate(name string, repos []string, all bool, base string, ov Overrides,
 		All:          all,
 		ReposDir:     reposDir,
 		WorktreesDir: worktreesDir,
-		Remote:       remote(ov.Remote, file, getenv),
+		Remote:       resolvedRemote,
 		// 0 は自動決定。実効的な並列度は選択されるリポジトリ数にも依存するため、
 		// 最終決定は worktree.Concurrency が行う。
 		Concurrency: conc,
@@ -156,17 +184,17 @@ func NewCreate(name string, repos []string, all bool, base string, ov Overrides,
 // フィルタの各名前を検証する。適用されるのはディレクトリのオーバーライドのみで
 // ある（server コマンドにはリモートや並列度がない）。操作（ServerKind）は App の
 // 型付きメソッドへ別途渡される。
-func NewServerCommand(ov Overrides, file *config.File, getenv func(string) string, repos []string) (ServerCommand, error) {
+func NewServerCommand(ov Overrides, file *config.File, getenv func(string) string, home func() (string, error), repos []string) (ServerCommand, error) {
 	for _, r := range repos {
 		if err := validateRepoName(r); err != nil {
 			return ServerCommand{}, err
 		}
 	}
-	reposDir, err := ReposDir(ov.ReposDir, file, getenv)
+	reposDir, err := ReposDir(ov.ReposDir, file, getenv, home)
 	if err != nil {
 		return ServerCommand{}, err
 	}
-	worktreesDir, err := WorktreesDir(ov.WorktreesDir, file, getenv)
+	worktreesDir, err := WorktreesDir(ov.WorktreesDir, file, getenv, home)
 	if err != nil {
 		return ServerCommand{}, err
 	}

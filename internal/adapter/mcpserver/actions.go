@@ -85,7 +85,7 @@ func actionCreateWorktrees(ctx context.Context, params CreateParams) (*create.Re
 	act, err := action.NewCreate(params.WorktreeName, params.Repos, false, params.Base, action.Overrides{
 		Remote:      params.Remote,
 		Concurrency: params.Concurrency,
-	}, t.app.Config, os.Getenv)
+	}, t.app.Config, os.Getenv, os.UserHomeDir)
 	if err != nil {
 		return nil, "", err
 	}
@@ -252,7 +252,7 @@ func serverCommand(repos []string) (*toolApp, action.ServerCommand, error) {
 	if err != nil {
 		return nil, action.ServerCommand{}, err
 	}
-	cmd, err := action.NewServerCommand(action.Overrides{}, t.app.Config, os.Getenv, repos)
+	cmd, err := action.NewServerCommand(action.Overrides{}, t.app.Config, os.Getenv, os.UserHomeDir, repos)
 	if err != nil {
 		return nil, action.ServerCommand{}, err
 	}

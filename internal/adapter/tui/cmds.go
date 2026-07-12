@@ -145,7 +145,7 @@ func buildApp(cfg *config.File, root statedir.Root, fw *forwarder) *app.App {
 // serverCommand は現在の設定から server 系ワークフローの実行コンテキストを解決する
 // （ディレクトリのオーバーライドは TUI に無い — 設定と WT_* 環境変数から解決する）。
 func serverCommand(cfg *config.File) (action.ServerCommand, error) {
-	return action.NewServerCommand(action.Overrides{}, cfg, os.Getenv, nil)
+	return action.NewServerCommand(action.Overrides{}, cfg, os.Getenv, os.UserHomeDir, nil)
 }
 
 // resolveCmd は設定を読み直し、全体のサーバー状態と、選択中サーバーノードのログパス
@@ -275,7 +275,7 @@ func (m *model) stopCmd(name string) tea.Cmd {
 func (m *model) createCmd(name string, repos []string) tea.Cmd {
 	ctx, root, fw, cfg := m.ctx, m.root, m.fw, m.cfg
 	return func() tea.Msg {
-		act, err := action.NewCreate(name, repos, false, "", action.Overrides{}, cfg, os.Getenv)
+		act, err := action.NewCreate(name, repos, false, "", action.Overrides{}, cfg, os.Getenv, os.UserHomeDir)
 		if err != nil {
 			return opDoneMsg{summary: "create を開始できません", err: err}
 		}

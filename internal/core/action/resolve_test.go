@@ -1,7 +1,7 @@
 package action
 
 import (
-	"os"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +13,14 @@ import (
 
 // noEnv は環境変数を一切設定しない getenv。
 func noEnv(string) string { return "" }
+
+// homeDir はテスト用の固定ホームディレクトリ。既定ディレクトリ（~/repositories・
+// ~/worktrees）の解決を os.UserHomeDir に依存させないため、home 注入として渡す。
+const homeDir = "/home/tester"
+
+// testHome は固定のホームディレクトリを返す home 注入（resolve が os.UserHomeDir を
+// 直読みしない、という契約の裏返し）。
+func testHome() (string, error) { return homeDir, nil }
 
 // envOf はマップに基づく getenv を返す。t.Setenv の儀式なしに環境変数の段を
 // テストできる（resolve が os.Getenv を直読みしない、という契約の裏返し）。
@@ -39,7 +47,7 @@ func TestResolutionPrecedenceTable(t *testing.T) {
 
 	t.Run("フラグが最優先", func(t *testing.T) {
 		ov := Overrides{ReposDir: "/flag/repos", WorktreesDir: "/flag/wt", Remote: "upstream", Concurrency: 9}
-		cfg, err := NewCreate("feat", nil, false, "", ov, file, env)
+		cfg, err := NewCreate("feat", nil, false, "", ov, file, env, testHome)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -49,7 +57,7 @@ func TestResolutionPrecedenceTable(t *testing.T) {
 	})
 
 	t.Run("フラグ無指定なら環境変数", func(t *testing.T) {
-		cfg, err := NewCreate("feat", nil, false, "", Overrides{}, file, env)
+		cfg, err := NewCreate("feat", nil, false, "", Overrides{}, file, env, testHome)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -59,7 +67,7 @@ func TestResolutionPrecedenceTable(t *testing.T) {
 	})
 
 	t.Run("環境変数も無ければ設定ファイル", func(t *testing.T) {
-		cfg, err := NewCreate("feat", nil, false, "", Overrides{}, file, noEnv)
+		cfg, err := NewCreate("feat", nil, false, "", Overrides{}, file, noEnv, testHome)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -69,18 +77,14 @@ func TestResolutionPrecedenceTable(t *testing.T) {
 	})
 
 	t.Run("すべて無ければ既定値", func(t *testing.T) {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			t.Skipf("home dir unavailable: %v", err)
-		}
-		cfg, err := NewCreate("feat", nil, false, "", Overrides{}, &config.File{}, noEnv)
+		cfg, err := NewCreate("feat", nil, false, "", Overrides{}, &config.File{}, noEnv, testHome)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.ReposDir != filepath.Join(home, "repositories") {
+		if cfg.ReposDir != filepath.Join(homeDir, "repositories") {
 			t.Errorf("ReposDir = %q", cfg.ReposDir)
 		}
-		if cfg.WorktreesDir != filepath.Join(home, "worktrees") {
+		if cfg.WorktreesDir != filepath.Join(homeDir, "worktrees") {
 			t.Errorf("WorktreesDir = %q", cfg.WorktreesDir)
 		}
 		if cfg.Remote != "origin" {
@@ -95,13 +99,13 @@ func TestResolutionPrecedenceTable(t *testing.T) {
 // WT_CONCURRENCY は整数として解釈され、不正な値・負値はエラーになる。
 // "0" は「自動 = 未指定」として次の段（設定ファイル）へフォールスルーする。
 func TestConcurrencyEnvParsing(t *testing.T) {
-	if _, err := NewCreate("feat", nil, false, "", Overrides{}, &config.File{}, envOf(map[string]string{"WT_CONCURRENCY": "abc"})); err == nil {
+	if _, err := NewCreate("feat", nil, false, "", Overrides{}, &config.File{}, envOf(map[string]string{"WT_CONCURRENCY": "abc"}), testHome); err == nil {
 		t.Error("非整数の WT_CONCURRENCY はエラーになるべき")
 	}
-	if _, err := NewCreate("feat", nil, false, "", Overrides{}, &config.File{}, envOf(map[string]string{"WT_CONCURRENCY": "-1"})); err == nil {
+	if _, err := NewCreate("feat", nil, false, "", Overrides{}, &config.File{}, envOf(map[string]string{"WT_CONCURRENCY": "-1"}), testHome); err == nil {
 		t.Error("負の WT_CONCURRENCY はエラーになるべき")
 	}
-	cfg, err := NewCreate("feat", nil, false, "", Overrides{}, &config.File{Concurrency: 5}, envOf(map[string]string{"WT_CONCURRENCY": "0"}))
+	cfg, err := NewCreate("feat", nil, false, "", Overrides{}, &config.File{Concurrency: 5}, envOf(map[string]string{"WT_CONCURRENCY": "0"}), testHome)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,10 +117,10 @@ func TestConcurrencyEnvParsing(t *testing.T) {
 // 負の並列度フラグはエラー。0 は「自動」として受理される（旧実装は 0 を拒否して
 // いたが、pointer-as-optional の廃止に伴い 0 = 自動へ変更した — 意図的な仕様変更）。
 func TestNewCreateConcurrencyValidation(t *testing.T) {
-	if _, err := NewCreate("feat", nil, false, "", Overrides{Concurrency: -1}, &config.File{}, noEnv); err == nil {
+	if _, err := NewCreate("feat", nil, false, "", Overrides{Concurrency: -1}, &config.File{}, noEnv, testHome); err == nil {
 		t.Error("負の並列度はエラーになるべき")
 	}
-	cfg, err := NewCreate("feat", nil, false, "", Overrides{Concurrency: 0}, &config.File{}, noEnv)
+	cfg, err := NewCreate("feat", nil, false, "", Overrides{Concurrency: 0}, &config.File{}, noEnv, testHome)
 	if err != nil {
 		t.Fatalf("並列度 0（自動）は受理されるべき: %v", err)
 	}
@@ -126,7 +130,7 @@ func TestNewCreateConcurrencyValidation(t *testing.T) {
 }
 
 func TestNewCreateValidatesName(t *testing.T) {
-	if _, err := NewCreate("bad name", nil, false, "", Overrides{}, &config.File{}, noEnv); err == nil {
+	if _, err := NewCreate("bad name", nil, false, "", Overrides{}, &config.File{}, noEnv, testHome); err == nil {
 		t.Fatal("expected validation error")
 	}
 }
@@ -134,18 +138,78 @@ func TestNewCreateValidatesName(t *testing.T) {
 // 明示されたリポジトリ名はパスコンポーネントとして検証され、--repo と --all の
 // 同時指定は拒否される。
 func TestNewCreateValidatesRepoSelection(t *testing.T) {
-	if _, err := NewCreate("feat", []string{"../escape"}, false, "", Overrides{}, &config.File{}, noEnv); err == nil {
+	if _, err := NewCreate("feat", []string{"../escape"}, false, "", Overrides{}, &config.File{}, noEnv, testHome); err == nil {
 		t.Error("不正なリポジトリ名はエラーになるべき")
 	}
-	if _, err := NewCreate("feat", []string{"api"}, true, "", Overrides{}, &config.File{}, noEnv); err == nil {
+	if _, err := NewCreate("feat", []string{"api"}, true, "", Overrides{}, &config.File{}, noEnv, testHome); err == nil {
 		t.Error("--repo と --all の同時指定はエラーになるべき")
 	}
-	cfg, err := NewCreate("feat", []string{"api", "web"}, false, "", Overrides{}, &config.File{}, noEnv)
+	cfg, err := NewCreate("feat", []string{"api", "web"}, false, "", Overrides{}, &config.File{}, noEnv, testHome)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(cfg.Repos) != 2 || cfg.All {
 		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+// validateBase は git fetch の位置引数（ブランチ名）へ渡る base 指定を検証する。
+// リテラル "auto" と通常のブランチ名は許可し、先頭 '-' のオプション化・パス
+// トラバーサル・空文字は拒否する。
+func TestValidateBase(t *testing.T) {
+	for _, b := range []string{"auto", "main", "feature/x"} {
+		if err := validateBase(b); err != nil {
+			t.Errorf("validateBase(%q) = %v, want nil", b, err)
+		}
+	}
+	for _, b := range []string{"--upload-pack=/bin/true", "-x", "", "feature/-x", "../escape"} {
+		if err := validateBase(b); err == nil {
+			t.Errorf("validateBase(%q) = nil, want error", b)
+		}
+	}
+}
+
+// validateRemote は git fetch の位置引数（リモート名）へ渡る remote 指定を、単一
+// セグメントとして検証する。"origin" は許可し、先頭 '-'・"/"・空文字は拒否する。
+func TestValidateRemote(t *testing.T) {
+	if err := validateRemote("origin"); err != nil {
+		t.Errorf("validateRemote(origin) = %v, want nil", err)
+	}
+	for _, r := range []string{"-origin", "", "a/b", "--upload-pack=x"} {
+		if err := validateRemote(r); err == nil {
+			t.Errorf("validateRemote(%q) = nil, want error", r)
+		}
+	}
+}
+
+// NewCreate は base・remote の参照しうる全ソース（--base フラグ・remote・
+// [defaults].base・[repos.<name>].base）を検証し、違反時はエラーを返す。
+func TestNewCreateValidatesBaseAndRemote(t *testing.T) {
+	// 不正な --base フラグ。
+	if _, err := NewCreate("feat", nil, false, "--upload-pack=/bin/true", Overrides{}, &config.File{}, noEnv, testHome); err == nil {
+		t.Error("不正な --base はエラーになるべき")
+	}
+	// 不正な remote（フラグ）。
+	if _, err := NewCreate("feat", nil, false, "", Overrides{Remote: "-origin"}, &config.File{}, noEnv, testHome); err == nil {
+		t.Error("不正な remote はエラーになるべき")
+	}
+	// 不正な [repos.<name>].base。
+	badRepo := &config.File{Repos: map[string]config.RepoConfig{"api": {Base: "-x"}}}
+	if _, err := NewCreate("feat", nil, false, "", Overrides{}, badRepo, noEnv, testHome); err == nil {
+		t.Error("不正な [repos.api].base はエラーになるべき")
+	}
+	// 不正な [defaults].base。
+	badDefaults := &config.File{Defaults: config.Defaults{Base: "--exec=x"}}
+	if _, err := NewCreate("feat", nil, false, "", Overrides{}, badDefaults, noEnv, testHome); err == nil {
+		t.Error("不正な [defaults].base はエラーになるべき")
+	}
+	// 正常系: auto / main / feature/x・origin はいずれも通る。
+	ok := &config.File{
+		Defaults: config.Defaults{Base: "main"},
+		Repos:    map[string]config.RepoConfig{"api": {Base: "feature/x"}},
+	}
+	if _, err := NewCreate("feat", nil, false, "auto", Overrides{Remote: "origin"}, ok, noEnv, testHome); err != nil {
+		t.Errorf("正常な base・remote は通るべき: %v", err)
 	}
 }
 
@@ -160,7 +224,7 @@ func TestCreateBaseForResolutionOrder(t *testing.T) {
 	}
 
 	// フラグ最優先。
-	cfg, err := NewCreate("feat", nil, false, "flag-base", Overrides{}, file, noEnv)
+	cfg, err := NewCreate("feat", nil, false, "flag-base", Overrides{}, file, noEnv, testHome)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +236,7 @@ func TestCreateBaseForResolutionOrder(t *testing.T) {
 	}
 
 	// フラグ無指定なら repos.<repo>.base。
-	cfg, err = NewCreate("feat", nil, false, "", Overrides{}, file, noEnv)
+	cfg, err = NewCreate("feat", nil, false, "", Overrides{}, file, noEnv, testHome)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +249,7 @@ func TestCreateBaseForResolutionOrder(t *testing.T) {
 	}
 
 	// defaults.base も無ければ "auto"。
-	cfg, err = NewCreate("feat", nil, false, "", Overrides{}, &config.File{}, noEnv)
+	cfg, err = NewCreate("feat", nil, false, "", Overrides{}, &config.File{}, noEnv, testHome)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +266,7 @@ func TestCreateCopyPlanForMerges(t *testing.T) {
 			"api": {Copy: config.CopySpec{Paths: []string{"backend/.env"}, Gitignored: true}},
 		},
 	}
-	cfg, err := NewCreate("feat", nil, false, "", Overrides{}, file, noEnv)
+	cfg, err := NewCreate("feat", nil, false, "", Overrides{}, file, noEnv, testHome)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +282,7 @@ func TestCreateCopyPlanForMerges(t *testing.T) {
 
 func TestNewServerCommandResolvesDirs(t *testing.T) {
 	file := &config.File{WorktreesDir: "/cfg/wt"}
-	cmd, err := NewServerCommand(Overrides{ReposDir: "/explicit/repos"}, file, noEnv, nil)
+	cmd, err := NewServerCommand(Overrides{ReposDir: "/explicit/repos"}, file, noEnv, testHome, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,10 +293,10 @@ func TestNewServerCommandResolvesDirs(t *testing.T) {
 
 // NewServerCommand は Repos フィルタの各要素をパスコンポーネントとして検証する。
 func TestNewServerCommandValidatesRepoNames(t *testing.T) {
-	if _, err := NewServerCommand(Overrides{}, &config.File{}, noEnv, []string{"ok", "../bad"}); err == nil {
+	if _, err := NewServerCommand(Overrides{}, &config.File{}, noEnv, testHome, []string{"ok", "../bad"}); err == nil {
 		t.Fatal("不正なリポジトリ名はエラーになるべき")
 	}
-	cmd, err := NewServerCommand(Overrides{}, &config.File{}, noEnv, []string{"api"})
+	cmd, err := NewServerCommand(Overrides{}, &config.File{}, noEnv, testHome, []string{"api"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +309,7 @@ func TestNewServerCommandValidatesRepoNames(t *testing.T) {
 // （ServerKind）はコマンドに埋め込まれず、App の型付きメソッドへ別途渡される。
 func TestNewServerCommandResolvesFromEnv(t *testing.T) {
 	env := envOf(map[string]string{"WT_REPOS_DIR": "/env/repos", "WT_WORKTREES_DIR": "/env/wt"})
-	cmd, err := NewServerCommand(Overrides{}, &config.File{}, env, nil)
+	cmd, err := NewServerCommand(Overrides{}, &config.File{}, env, testHome, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +326,7 @@ func TestNewServerCommandAggregatesServersFromRepos(t *testing.T) {
 			"api": {Servers: map[string]server.Spec{"backend": {Start: cmdspec.FromString("run")}}},
 		},
 	}
-	cmd, err := NewServerCommand(Overrides{}, file, noEnv, nil)
+	cmd, err := NewServerCommand(Overrides{}, file, noEnv, testHome, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +340,7 @@ func TestNewServerCommandAggregatesServersFromRepos(t *testing.T) {
 func TestRemoteResolutionOrder(t *testing.T) {
 	env := envOf(map[string]string{"WT_REMOTE": "envremote"})
 	// フラグが最優先。
-	cfg, err := NewCreate("feat", nil, false, "", Overrides{Remote: "upstream"}, &config.File{Remote: "fork"}, env)
+	cfg, err := NewCreate("feat", nil, false, "", Overrides{Remote: "upstream"}, &config.File{Remote: "fork"}, env, testHome)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +348,7 @@ func TestRemoteResolutionOrder(t *testing.T) {
 		t.Fatalf("override should win: %q", cfg.Remote)
 	}
 	// フラグが無ければ環境変数。
-	cfg, err = NewCreate("feat", nil, false, "", Overrides{}, &config.File{Remote: "fork"}, env)
+	cfg, err = NewCreate("feat", nil, false, "", Overrides{}, &config.File{Remote: "fork"}, env, testHome)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +356,7 @@ func TestRemoteResolutionOrder(t *testing.T) {
 		t.Fatalf("env should win: %q", cfg.Remote)
 	}
 	// 環境変数も無ければファイル。
-	cfg, err = NewCreate("feat", nil, false, "", Overrides{}, &config.File{Remote: "fork"}, noEnv)
+	cfg, err = NewCreate("feat", nil, false, "", Overrides{}, &config.File{Remote: "fork"}, noEnv, testHome)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +364,7 @@ func TestRemoteResolutionOrder(t *testing.T) {
 		t.Fatalf("file should win: %q", cfg.Remote)
 	}
 	// どれも無ければ "origin"。
-	cfg, err = NewCreate("feat", nil, false, "", Overrides{}, &config.File{}, noEnv)
+	cfg, err = NewCreate("feat", nil, false, "", Overrides{}, &config.File{}, noEnv, testHome)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,14 +373,14 @@ func TestRemoteResolutionOrder(t *testing.T) {
 	}
 }
 
-// HOME を特定できない場合、既定ディレクトリの解決は（旧実装の相対パスへの静かな
-// フォールバックではなく）エラーになる — 意図的な仕様変更。os.UserHomeDir は
-// HOME 環境変数を参照するため、ここだけは t.Setenv で HOME を消す。
+// home（os.UserHomeDir の注入）がホームディレクトリを特定できない場合、既定ディレクトリ
+// の解決は（旧実装の相対パスへの静かなフォールバックではなく）エラーになる — 意図的な
+// 仕様。home を注入するため、環境変数の差し替え（t.Setenv）は要らない。
 func TestDefaultDirErrorsWithoutHome(t *testing.T) {
-	t.Setenv("HOME", "")
-	_, err := ReposDir("", &config.File{}, noEnv)
+	failHome := func() (string, error) { return "", fmt.Errorf("ホーム不明") }
+	_, err := ReposDir("", &config.File{}, noEnv, failHome)
 	if err == nil {
-		t.Fatal("HOME 不明時はエラーになるべき")
+		t.Fatal("home 不明時はエラーになるべき")
 	}
 	if !strings.Contains(err.Error(), "ホームディレクトリ") {
 		t.Errorf("error = %q", err)

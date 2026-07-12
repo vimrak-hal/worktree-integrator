@@ -99,6 +99,15 @@ func gitError(args []string, stderr string, err error) error {
 // 1 本だけを指定することで、無関係な他ブランチの更新を避けて高速化する（旧実装は
 // remote 全体を fetch していた）。
 func FetchRef(ctx context.Context, dir, remote, branch string) error {
+	// 多層防御: remote・branch は位置引数として git fetch に渡る。上位（action の
+	// 検証）を通り抜けても、'-' で始まる値は git のオプション（"--upload-pack=<cmd>"
+	// による任意コマンド実行など）へ化けるため、コマンド実行前にここで弾く。
+	if strings.HasPrefix(remote, "-") {
+		return fmt.Errorf("リモート %q が不正です: '-' で始まる名前は git のオプションとして解釈されるため使えません", remote)
+	}
+	if strings.HasPrefix(branch, "-") {
+		return fmt.Errorf("ブランチ %q が不正です: '-' で始まる名前は git のオプションとして解釈されるため使えません", branch)
+	}
 	_, err := run(ctx, dir, "fetch", "--no-tags", remote, branch)
 	return err
 }

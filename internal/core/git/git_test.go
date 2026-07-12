@@ -100,6 +100,19 @@ func TestFetchRefRejectsCanceledContext(t *testing.T) {
 	}
 }
 
+// 多層防御: '-' で始まる remote / branch は git のオプション（"--upload-pack=<cmd>"
+// による任意コマンド実行など）へ化けるため、FetchRef は git を実行する前に弾く。
+// リポジトリの用意は不要（実行前に失敗する）ため、任意のディレクトリで検証する。
+func TestFetchRefRejectsDashPrefixedArgs(t *testing.T) {
+	dir := t.TempDir()
+	if err := git.FetchRef(t.Context(), dir, "-origin", "main"); err == nil {
+		t.Error("FetchRef(-origin) error = nil, want error")
+	}
+	if err := git.FetchRef(t.Context(), dir, "origin", "--upload-pack=/bin/true"); err == nil {
+		t.Error("FetchRef(--upload-pack=...) error = nil, want error")
+	}
+}
+
 // DefaultBranch は、クローン時に設定される refs/remotes/<remote>/HEAD の
 // symbolic-ref をまず見る（(g) の検証要件: symbolic-ref あり）。
 func TestDefaultBranchUsesSymbolicRef(t *testing.T) {
