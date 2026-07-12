@@ -337,6 +337,66 @@ func TestParsesStatusJson(t *testing.T) {
 	}
 }
 
+// --json は型付き Result を返す全コマンドで解析され、対応する Json フィールドに乗る
+// （既存の list / doctor / status に加え、create / remove / repos / alias list /
+// server switch / stop / logs へ開放した）。未指定は各コマンドで false のまま。
+func TestJsonFlagAcrossResultCommands(t *testing.T) {
+	if !createOf(t, parse(t, "create", "feat", "--json")).Json {
+		t.Fatal("create --json should set Json")
+	}
+	if createOf(t, parse(t, "feat")).Json {
+		t.Fatal("create without --json must not set Json")
+	}
+	if !parse(t, "remove", "feat-x", "--json").(Remove).Json {
+		t.Fatal("remove --json should set Json")
+	}
+	if parse(t, "remove", "feat-x").(Remove).Json {
+		t.Fatal("remove without --json must not set Json")
+	}
+	if !parse(t, "repos", "--json").(Repos).Json {
+		t.Fatal("repos --json should set Json")
+	}
+	if !aliasOf(t, parse(t, "alias", "list", "--json")).Json {
+		t.Fatal("alias list --json should set Json")
+	}
+	if aliasOf(t, parse(t, "alias", "list")).Json {
+		t.Fatal("alias list without --json must not set Json")
+	}
+	if !serverOf(t, parse(t, "server", "switch", "feat-x", "--json")).Json {
+		t.Fatal("server switch --json should set Json")
+	}
+	if !serverOf(t, parse(t, "server", "stop", "--json")).Json {
+		t.Fatal("server stop --json should set Json")
+	}
+	if !serverOf(t, parse(t, "server", "logs", "--json")).Json {
+		t.Fatal("server logs --json should set Json")
+	}
+}
+
+// server logs は -f（追従ストリーム）と --json（1 回きりの機械可読出力）を併用できない。
+func TestServerLogsFollowAndJsonAreMutuallyExclusive(t *testing.T) {
+	if _, err := Parse([]string{"server", "logs", "-f", "--json"}); err == nil ||
+		!strings.Contains(err.Error(), "同時に指定できません") {
+		t.Fatalf("server logs -f --json should be a mutual-exclusion error, got %v", err)
+	}
+	// 片方だけなら通る（-f 単独）。
+	srv := serverOf(t, parse(t, "server", "logs", "-f"))
+	if !srv.FollowLogs || srv.Json {
+		t.Fatalf("srv = %+v, want FollowLogs without Json", srv)
+	}
+}
+
+// alias set / remove はスカラー結果のため --json を受け付けない（型付き Result を
+// 返す list のみが対象）。
+func TestAliasSetRemoveRejectJson(t *testing.T) {
+	if _, err := Parse([]string{"alias", "set", "feat-x", "Login", "--json"}); err == nil {
+		t.Fatal("alias set should not accept --json")
+	}
+	if _, err := Parse([]string{"alias", "remove", "feat-x", "--json"}); err == nil {
+		t.Fatal("alias remove should not accept --json")
+	}
+}
+
 // 引数の省略のみが「全 worktree 対象」を意味する。
 func TestStopLogsOmittedNameScopesToAllWorktrees(t *testing.T) {
 	stop := serverOf(t, parse(t, "server", "stop")).Kind.(action.StopKind)

@@ -165,16 +165,16 @@ worktree に引き継ぐための仕組み。
 
 ```sh
 worktree-integrator <name>                # ≡ create <name>（対話選択）
-worktree-integrator create <name> [--repo <repo>]... [--all] [--base <ref>] [-j N]
+worktree-integrator create <name> [--repo <repo>]... [--all] [--base <ref>] [-j N] [--json]
 worktree-integrator list   [--json]
 worktree-integrator enter  <name>         # after フックだけ実行（移動用）
-worktree-integrator remove <name> [--force] [--keep-branch]
-worktree-integrator repos
-worktree-integrator server switch <name> [--repo <repo>]... [--require-worktree] [--restart]
+worktree-integrator remove <name> [--force] [--keep-branch] [--json]
+worktree-integrator repos [--json]
+worktree-integrator server switch <name> [--repo <repo>]... [--require-worktree] [--restart] [--json]
 worktree-integrator server status [--repo <repo>]... [--json]
-worktree-integrator server stop   [<name>] [--repo <repo>]...
-worktree-integrator server logs   [<name>] [--repo <repo>]... [-n N] [-f] [--prev]
-worktree-integrator alias set <name> <label> | alias list | alias remove <name>
+worktree-integrator server stop   [<name>] [--repo <repo>]... [--json]
+worktree-integrator server logs   [<name>] [--repo <repo>]... [-n N] [-f] [--prev] [--json]
+worktree-integrator alias set <name> <label> | alias list [--json] | alias remove <name>
 worktree-integrator doctor [--fix] [--json]
 worktree-integrator config check
 worktree-integrator mcp

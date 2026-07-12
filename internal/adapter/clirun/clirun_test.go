@@ -148,6 +148,71 @@ func TestRunServerStatusJson(t *testing.T) {
 	}
 }
 
+// --json は型付き Result を返す全コマンドで機械可読出力を出す。ここでは代表として
+// repos / server stop / create の JSON 経路を、JSON としてパースできて主要フィールドを
+// 含むこと（かつテキストが混ざらないこと）で確認する（テキスト描画は他テストが担う）。
+func TestRunJsonAcrossResultCommands(t *testing.T) {
+	isolate(t)
+	t.Setenv("WT_REPOS_DIR", t.TempDir())
+	t.Setenv("WT_WORKTREES_DIR", t.TempDir())
+
+	t.Run("repos --json", func(t *testing.T) {
+		var stdout bytes.Buffer
+		if err := runArgs(t, t.Context(), []string{"repos", "--json"}, &stdout); err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		var decoded struct {
+			ReposDir string           `json:"repos_dir"`
+			Repos    []map[string]any `json:"repos"`
+		}
+		if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil {
+			t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
+		}
+		if decoded.ReposDir == "" || len(decoded.Repos) != 0 {
+			t.Fatalf("decoded = %+v", decoded)
+		}
+		if strings.Contains(stdout.String(), "リポジトリが見つかりません") {
+			t.Fatalf("--json はテキストを描画しない: %q", stdout.String())
+		}
+	})
+
+	t.Run("server stop --json", func(t *testing.T) {
+		var stdout bytes.Buffer
+		if err := runArgs(t, t.Context(), []string{"server", "stop", "--json"}, &stdout); err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		var decoded struct {
+			Stopped int `json:"stopped"`
+			Failed  int `json:"failed"`
+		}
+		if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil {
+			t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
+		}
+		if decoded.Stopped != 0 || decoded.Failed != 0 {
+			t.Fatalf("decoded = %+v", decoded)
+		}
+	})
+
+	t.Run("create --all --json", func(t *testing.T) {
+		// リポジトリの無い repos_dir に対する --all は no_repositories で正常終了し
+		// （エラー無し）、Result を返す — その JSON 経路を確認する。
+		var stdout bytes.Buffer
+		if err := runArgs(t, t.Context(), []string{"create", "feat-x", "--all", "--json"}, &stdout); err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		var decoded struct {
+			Worktree    string `json:"worktree"`
+			Disposition string `json:"disposition"`
+		}
+		if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil {
+			t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
+		}
+		if decoded.Worktree != "feat-x" || decoded.Disposition == "" {
+			t.Fatalf("decoded = %+v", decoded)
+		}
+	})
+}
+
 // 非 TTY（テストのバッファ stdio）での素の create は、--repo / --all の指定を促す
 // エラーになる（対話プロンプトへは進まない）。
 func TestRunCreateWithoutTTYRequiresExplicitRepos(t *testing.T) {

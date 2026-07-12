@@ -39,6 +39,9 @@ type Create struct {
 	// 「未指定」（[repos.<name>].base → [defaults].base → "auto" へフォールスルー）。
 	Base string
 	Ov   action.Overrides
+	// Json は Result を JSON で出力する（表示形式の選択であり、action の語彙には
+	// 含めない）。
+	Json bool
 }
 
 // List は worktree 一覧の起動要求。
@@ -60,6 +63,9 @@ type Remove struct {
 	Name       action.Name
 	Force      bool
 	KeepBranch bool
+	// Json は Result を JSON で出力する（表示形式の選択であり、action の語彙には
+	// 含めない）。
+	Json bool
 }
 
 // Doctor は自己診断の起動要求。
@@ -70,7 +76,11 @@ type Doctor struct {
 }
 
 // Repos は repos_dir 直下のリポジトリ一覧の起動要求。
-type Repos struct{}
+type Repos struct {
+	// Json は Result を JSON で出力する（表示形式の選択であり、action の語彙には
+	// 含めない）。
+	Json bool
+}
 
 // Server は server サブコマンドの起動要求。
 type Server struct {
@@ -82,14 +92,18 @@ type Server struct {
 	// ため action.LogsKind には存在せず、main が LogsResult のパス情報を受けて
 	// 自前で tail -f を実行する（MCP からは型レベルで到達不能）。
 	FollowLogs bool
-	// Json は `server status --json`（Result を JSON で出力する）。表示形式の選択で
-	// あり、action の語彙には含めない。
+	// Json は server サブコマンド共通の `--json`（Result を JSON で出力する）。
+	// switch / status / stop / logs のいずれでも指定でき、表示形式の選択であって
+	// action の語彙には含めない。
 	Json bool
 }
 
 // Alias は alias サブコマンドの起動要求。Kind は解決を要しない完成済みの操作である。
 type Alias struct {
 	Kind action.AliasKind
+	// Json は `alias list --json`（Result を JSON で出力する）。list のみが型付き
+	// Result を返すため、set / remove（スカラー結果）では常に false である。
+	Json bool
 }
 
 // RunMCP は MCP サーバーとしての起動要求。ワークフローではなく実行モードである。
@@ -210,10 +224,11 @@ func addCreate(root *cobra.Command, result *Invocation) *cobra.Command {
 			repos, _ := fs.GetStringArray("repo")
 			all, _ := fs.GetBool("all")
 			base, _ := fs.GetString("base")
+			json, _ := fs.GetBool("json")
 			ov := dirOverrides(c)
 			ov.Remote, _ = fs.GetString("remote")
 			ov.Concurrency, _ = fs.GetInt("concurrency")
-			*result = Create{Name: args[0], Repos: repos, All: all, Base: base, Ov: ov}
+			*result = Create{Name: args[0], Repos: repos, All: all, Base: base, Ov: ov, Json: json}
 			return nil
 		},
 	}
@@ -223,6 +238,7 @@ func addCreate(root *cobra.Command, result *Invocation) *cobra.Command {
 	addDirFlags(cmd.Flags())
 	cmd.Flags().String("remote", "", "Remote to fetch from (env WT_REMOTE; defaults to origin)")
 	cmd.Flags().IntP("concurrency", "j", 0, "Maximum repositories processed in parallel (0 = automatic; env WT_CONCURRENCY)")
+	cmd.Flags().Bool("json", false, "Print the result as JSON")
 	root.AddCommand(cmd)
 	return cmd
 }
@@ -271,12 +287,14 @@ func addTree(root *cobra.Command, result *Invocation) {
 			}
 			force, _ := c.Flags().GetBool("force")
 			keepBranch, _ := c.Flags().GetBool("keep-branch")
-			*result = Remove{Name: name, Force: force, KeepBranch: keepBranch}
+			json, _ := c.Flags().GetBool("json")
+			*result = Remove{Name: name, Force: force, KeepBranch: keepBranch, Json: json}
 			return nil
 		},
 	}
 	removeCmd.Flags().Bool("force", false, "Remove even when a checkout has uncommitted changes (git worktree remove --force)")
 	removeCmd.Flags().Bool("keep-branch", false, "Keep the branch instead of deleting it (git branch -D)")
+	removeCmd.Flags().Bool("json", false, "Print the result as JSON")
 
 	doctorCmd := &cobra.Command{
 		Use:   "doctor",
@@ -296,11 +314,13 @@ func addTree(root *cobra.Command, result *Invocation) {
 		Use:   "repos",
 		Short: "List the Git repositories under the repositories directory",
 		Args:  cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			*result = Repos{}
+		RunE: func(c *cobra.Command, _ []string) error {
+			json, _ := c.Flags().GetBool("json")
+			*result = Repos{Json: json}
 			return nil
 		},
 	}
+	reposCmd.Flags().Bool("json", false, "Print the list as JSON")
 
 	root.AddCommand(listCmd, enterCmd, removeCmd, doctorCmd, reposCmd)
 }
@@ -317,15 +337,16 @@ func addServer(root *cobra.Command, result *Invocation) {
 	// ディレクトリのフラグは server 系のすべての操作で共通。
 	addDirFlags(server.PersistentFlags())
 
-	// build は実行されたコマンドの共通フラグ（--repo とディレクトリ）を読み取り、
-	// kind と合わせて Server 起動要求を組み立てる。status / logs は CLI 専用の表示
-	// フラグ（--json / -f）を足すため、ここで値を受け取って完成させてから一度だけ
-	// *result へ代入する（*result を読み戻して型アサーションで継ぎ足す形は避ける）。
+	// build は実行されたコマンドの共通フラグ（--repo・ディレクトリ・--json）を
+	// 読み取り、kind と合わせて Server 起動要求を組み立てる。--json は switch /
+	// status / stop / logs すべてが持つため build で一律に読む。logs だけは CLI 専用の
+	// 追従フラグ（-f）を RunE 側で足して完成させる。
 	build := func(c *cobra.Command, kind action.ServerKind) Server {
 		repos, _ := c.Flags().GetStringArray("repo")
-		return Server{Kind: kind, Repos: repos, Ov: dirOverrides(c)}
+		json, _ := c.Flags().GetBool("json")
+		return Server{Kind: kind, Repos: repos, Ov: dirOverrides(c), Json: json}
 	}
-	// set は表示フラグを持たない操作（switch / stop）の保存を 1 行に畳む。
+	// set は追従フラグを持たない操作（switch / status / stop）の保存を 1 行に畳む。
 	set := func(c *cobra.Command, kind action.ServerKind) {
 		*result = build(c, kind)
 	}
@@ -350,15 +371,14 @@ func addServer(root *cobra.Command, result *Invocation) {
 	switchCmd.Flags().StringArray("repo", nil, "Limit to these repositories (repeatable)")
 	switchCmd.Flags().Bool("require-worktree", false, "Error (instead of skipping) when a repository's worktree is missing")
 	switchCmd.Flags().Bool("restart", false, "Restart even if the requested worktree's server is already running")
+	switchCmd.Flags().Bool("json", false, "Print the result as JSON")
 
 	statusCmd := &cobra.Command{
 		Use: "status", Aliases: []string{"ls"},
 		Short: "Show which worktree owns each repository's server",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
-			srv := build(c, action.StatusKind{})
-			srv.Json, _ = c.Flags().GetBool("json")
-			*result = srv
+			set(c, action.StatusKind{})
 			return nil
 		},
 	}
@@ -379,6 +399,7 @@ func addServer(root *cobra.Command, result *Invocation) {
 		},
 	}
 	stopCmd.Flags().StringArray("repo", nil, "Limit to these repositories (repeatable)")
+	stopCmd.Flags().Bool("json", false, "Print the result as JSON")
 
 	logsCmd := &cobra.Command{
 		Use: "logs [name]", Aliases: []string{"log"},
@@ -391,9 +412,17 @@ func addServer(root *cobra.Command, result *Invocation) {
 			}
 			lines, _ := c.Flags().GetInt("lines")
 			prev, _ := c.Flags().GetBool("prev")
+			follow, _ := c.Flags().GetBool("follow")
+			json, _ := c.Flags().GetBool("json")
+			// -f（tail -f のストリーム）と --json（1 回きりの機械可読出力）は表示手段
+			// として両立しない。cobra の相互排他は英語メッセージになるため、周囲の
+			// 規約（action.resolve の「同時に指定できません」）に合わせて明示的に弾く。
+			if follow && json {
+				return fmt.Errorf("-f と --json は同時に指定できません")
+			}
 			srv := build(c, action.LogsKind{Scope: scope, Lines: lines, Prev: prev})
 			// -f は action の語彙ではなく CLI の表示手段（Server 起動要求のフラグ）。
-			srv.FollowLogs, _ = c.Flags().GetBool("follow")
+			srv.FollowLogs = follow
 			*result = srv
 			return nil
 		},
@@ -402,6 +431,7 @@ func addServer(root *cobra.Command, result *Invocation) {
 	logsCmd.Flags().BoolP("follow", "f", false, "Follow the logs (tail -f)")
 	logsCmd.Flags().IntP("lines", "n", 50, "Number of trailing lines to show")
 	logsCmd.Flags().Bool("prev", false, "Show the previous generation of the log (rotated at server start)")
+	logsCmd.Flags().Bool("json", false, "Print the result as JSON (incompatible with -f)")
 
 	server.AddCommand(switchCmd, statusCmd, stopCmd, logsCmd)
 	root.AddCommand(server)
@@ -420,6 +450,9 @@ func addAlias(root *cobra.Command, result *Invocation) {
 		RunE: func(c *cobra.Command, _ []string) error { return c.Help() },
 	}
 
+	// set / remove は構造化 Result ではなくスカラー（保存済みの別名文字列・存在
+	// フラグ）を返すため --json の対象外。JSON 化する型付き Result を持つのは list
+	// だけで、そこにのみ --json を足す。
 	setCmd := &cobra.Command{
 		Use: "set <name> <label>", Short: "Set (or update) the alias shown for a worktree",
 		Args: cobra.ExactArgs(2),
@@ -435,11 +468,13 @@ func addAlias(root *cobra.Command, result *Invocation) {
 	listCmd := &cobra.Command{
 		Use: "list", Aliases: []string{"ls"}, Short: "List every worktree alias",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			set(action.AliasList{})
+		RunE: func(c *cobra.Command, _ []string) error {
+			json, _ := c.Flags().GetBool("json")
+			*result = Alias{Kind: action.AliasList{}, Json: json}
 			return nil
 		},
 	}
+	listCmd.Flags().Bool("json", false, "Print the aliases as JSON")
 	rmCmd := &cobra.Command{
 		Use: "remove <name>", Aliases: []string{"rm"}, Short: "Remove a worktree's alias",
 		Args: cobra.ExactArgs(1),

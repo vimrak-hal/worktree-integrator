@@ -2,26 +2,32 @@
 
 ```sh
 wt <name>                # ≡ wt create <name>
-wt create <name> [--repo <repo>]... [--all] [--base <ref>] [-j N]
+wt create <name> [--repo <repo>]... [--all] [--base <ref>] [-j N] [--json]
 wt list   [--json]
 wt enter  <name>
-wt remove <name> [--force] [--keep-branch]
-wt repos
-wt server switch <name> [--repo <repo>]... [--require-worktree] [--restart]
+wt remove <name> [--force] [--keep-branch] [--json]
+wt repos [--json]
+wt server switch <name> [--repo <repo>]... [--require-worktree] [--restart] [--json]
 wt server status [--repo <repo>]... [--json]
-wt server stop   [<name>] [--repo <repo>]...
-wt server logs   [<name>] [--repo <repo>]... [-n N] [-f] [--prev]
-wt alias set <name> <label> | wt alias list | wt alias remove <name>
+wt server stop   [<name>] [--repo <repo>]... [--json]
+wt server logs   [<name>] [--repo <repo>]... [-n N] [-f] [--prev] [--json]
+wt alias set <name> <label> | wt alias list [--json] | wt alias remove <name>
 wt doctor [--fix] [--json]
 wt config check
 wt ui                    # 引数なしの `wt` でも開く
 wt mcp
 ```
 
+`--json` は構造化された結果を返すすべてのコマンド（`create` / `list` / `remove` /
+`repos` / `doctor` / `server switch|status|stop|logs` / `alias list`）で使えます。人間
+向けのテキストの代わりに、MCP の `structuredContent` と同じ形の JSON を標準出力へ
+書き出します。`alias set` / `alias remove` はスカラー結果のため対象外です。`server
+logs` の `--json`（1 回きりの機械可読出力）は `-f`（追従ストリーム）と併用できません。
+
 ## `create` — worktree の作成
 
 ```sh
-wt create <name> [--repo <repo>]... [--all] [--base <ref>] [-j N]
+wt create <name> [--repo <repo>]... [--all] [--base <ref>] [-j N] [--json]
 ```
 
 素の `wt <name>` は `wt create <name>` の省略形です（サブコマンド名と同じ worktree
@@ -118,7 +124,7 @@ wt enter <name>
 ## `remove` — worktree の削除
 
 ```sh
-wt remove <name> [--force] [--keep-branch]
+wt remove <name> [--force] [--keep-branch] [--json]
 ```
 
 以下を順に行います:
@@ -139,7 +145,7 @@ wt remove <name> [--force] [--keep-branch]
 ## `repos` — リポジトリの一覧
 
 ```sh
-wt repos
+wt repos [--json]
 ```
 
 `repos_dir` 直下（再帰なし）で Git リポジトリとして検出されたディレクトリを名前順に
