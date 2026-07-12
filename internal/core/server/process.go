@@ -10,9 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/vimrak-hal/worktree-integrator/internal/core/wtenv"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/childio"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/proc"
-	"github.com/vimrak-hal/worktree-integrator/internal/infra/wtenv"
 )
 
 // pollInterval は、停止したグループの終了を待つ間にポーリングする間隔。
@@ -80,7 +80,7 @@ func groupAlive(pgid int) bool {
 // （フックと共通の sh -c 実行経路）に委ね、ここでは結果を server の契約（ok, err）へ
 // 写すだけを担う。
 func (u *UnixProcess) RunForeground(ctx context.Context, script, cwd string, env []wtenv.Pair) (bool, error) {
-	err := proc.Run(ctx, script, cwd, env, u.io)
+	err := proc.Run(ctx, script, cwd, wtenv.Environ(os.Environ(), env), u.io)
 	if err == nil {
 		return true, nil
 	}

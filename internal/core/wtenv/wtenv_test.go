@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/vimrak-hal/worktree-integrator/internal/infra/wtenv"
+	"github.com/vimrak-hal/worktree-integrator/internal/core/wtenv"
 )
 
 // pairsToMap は Pair のスライスをキー→値のマップに変換し、重複キーがあれば

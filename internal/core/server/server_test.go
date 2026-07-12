@@ -11,9 +11,9 @@ import (
 	"github.com/vimrak-hal/worktree-integrator/internal/core/cmdspec"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/server"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/server/serverfake"
+	"github.com/vimrak-hal/worktree-integrator/internal/core/wtenv"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/proc"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/statedir"
-	"github.com/vimrak-hal/worktree-integrator/internal/infra/wtenv"
 )
 
 func ptr[T any](v T) *T { return &v }

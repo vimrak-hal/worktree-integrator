@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/core/cmdspec"
+	"github.com/vimrak-hal/worktree-integrator/internal/core/wtenv"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/childio"
-	"github.com/vimrak-hal/worktree-integrator/internal/infra/wtenv"
 )
 
 func discard() childio.Streams {

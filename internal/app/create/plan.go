@@ -6,7 +6,7 @@ import (
 	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/git/repo"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/git/worktree"
-	"github.com/vimrak-hal/worktree-integrator/internal/infra/wtenv"
+	"github.com/vimrak-hal/worktree-integrator/internal/core/wtenv"
 )
 
 // buildRequests は選択された各リポジトリにつき 1 つの Request を構築し、各

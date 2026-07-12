@@ -12,7 +12,6 @@ import (
 
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/childio"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/proc"
-	"github.com/vimrak-hal/worktree-integrator/internal/infra/wtenv"
 )
 
 // TestStartTimeOfSelf は、テスト自身のプロセスの開始時刻が「過去だが遠すぎない」
@@ -137,11 +136,11 @@ func TestRunExitCodes(t *testing.T) {
 	}
 }
 
-// TestRunUsesCwdAndEnv は、コマンドが cwd で実行され、渡した環境変数ペアが
-// 子プロセスに見えることを確認する。
+// TestRunUsesCwdAndEnv は、コマンドが cwd で実行され、渡した環境変数
+// （"KEY=VALUE" 形式）が子プロセスに見えることを確認する。
 func TestRunUsesCwdAndEnv(t *testing.T) {
 	dir := t.TempDir()
-	env := []wtenv.Pair{{Key: "WT_PROBE", Value: "hello"}}
+	env := append(os.Environ(), "WT_PROBE=hello")
 	if err := proc.Run(t.Context(), `printf '%s' "$WT_PROBE" > out.txt`, dir, env, quiet()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}

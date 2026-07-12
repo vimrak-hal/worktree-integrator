@@ -14,13 +14,11 @@ package proc
 import (
 	"context"
 	"errors"
-	"os"
 	"os/exec"
 	"syscall"
 	"time"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/childio"
-	"github.com/vimrak-hal/worktree-integrator/internal/infra/wtenv"
 )
 
 // ErrGone は、問い合わせた PID のプロセスが存在しないことを表す。呼び出し側は
@@ -86,18 +84,23 @@ const waitDelay = 2 * time.Second
 
 // Run は script を `sh -c` として cwd で完了まで実行する。フック（core/hooks）と
 // サーバーのライフサイクルコマンド（core/server）が共有する唯一のフォアグラウンド
-// 実行経路であり、環境変数の合成・WaitDelay・標準ストリームの接続をここに一本化する。
+// 実行経路であり、WaitDelay・標準ストリームの接続をここに一本化する。
 // cwd が空の場合は呼び出し元のカレントディレクトリを引き継ぐ。
+//
+// env は子プロセスの環境を "KEY=VALUE" 文字列のスライス（os/exec の Cmd.Env と
+// 同形）で与える。nil を渡すと呼び出し元プロセスの環境をそのまま継承する。
+// 継承環境への WT_* 変数の合成は呼び出し側の責務であり、この純機構は与えられた
+// env をそのまま子プロセスへ渡す。
 //
 // 返り値の契約: 正常終了（exit 0）なら nil。実行はされたが 0 以外で終了した場合は
 // *exec.ExitError（呼び出し側が errors.As で判別する）。それ以外は実行自体の失敗。
 // ctx のキャンセルで殺されたコマンドも *exec.ExitError（"signal: killed"）を報告する
 // ため、キャンセルを区別したい呼び出し側は ctx.Err() を先に確認すること。
-func Run(ctx context.Context, script, cwd string, env []wtenv.Pair, streams childio.Streams) error {
+func Run(ctx context.Context, script, cwd string, env []string, streams childio.Streams) error {
 	cmd := exec.CommandContext(ctx, "sh", "-c", script)
 	cmd.WaitDelay = waitDelay
 	cmd.Dir = cwd
-	cmd.Env = wtenv.Environ(os.Environ(), env)
+	cmd.Env = env
 	cmd.Stdin = streams.Stdin
 	cmd.Stdout = streams.Stdout
 	cmd.Stderr = streams.Stderr

@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/core/server"
+	"github.com/vimrak-hal/worktree-integrator/internal/core/wtenv"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/childio"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/proc"
-	"github.com/vimrak-hal/worktree-integrator/internal/infra/wtenv"
 )
 
 // quietProc は、テスト中に標準出力を汚さない UnixProcess を返す。

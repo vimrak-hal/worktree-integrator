@@ -8,7 +8,7 @@ import (
 
 	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
 	coreserver "github.com/vimrak-hal/worktree-integrator/internal/core/server"
-	"github.com/vimrak-hal/worktree-integrator/internal/infra/wtenv"
+	"github.com/vimrak-hal/worktree-integrator/internal/core/wtenv"
 )
 
 // Switch は対象リポジトリの全サーバーを k.Name の worktree へ切り替え、型付きの

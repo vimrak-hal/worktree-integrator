@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vimrak-hal/worktree-integrator/internal/core/wtenv"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/proc"
-	"github.com/vimrak-hal/worktree-integrator/internal/infra/wtenv"
 )
 
 // Fake は、インメモリの生存マップに支えられた ProcessControl。起動された

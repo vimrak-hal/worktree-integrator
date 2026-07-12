@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/core/cmdspec"
+	"github.com/vimrak-hal/worktree-integrator/internal/core/wtenv"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/proc"
-	"github.com/vimrak-hal/worktree-integrator/internal/infra/wtenv"
 )
 
 // SwitchStatus は実行サマリ向けの、サーバー切り替えが成功した場合の結果を表す。

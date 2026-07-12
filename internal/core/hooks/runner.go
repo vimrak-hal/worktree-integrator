@@ -6,13 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
 
+	"github.com/vimrak-hal/worktree-integrator/internal/core/wtenv"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/childio"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/proc"
-	"github.com/vimrak-hal/worktree-integrator/internal/infra/wtenv"
 )
 
 // job は作業の単位。1 つのフックと、任意でひも付けられたリポジトリを保持する。
@@ -89,7 +90,7 @@ func execute(ctx context.Context, hook *Hook, run *wtenv.RunContext, repo *wtenv
 	}
 
 	streams, closeStreams := taggedStreams(cio, hook.Name)
-	err := proc.Run(hookCtx, hook.Command.Script(), dir, env, streams)
+	err := proc.Run(hookCtx, hook.Command.Script(), dir, wtenv.Environ(os.Environ(), env), streams)
 	closeStreams()
 
 	if err != nil {

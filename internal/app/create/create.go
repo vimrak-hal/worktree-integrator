@@ -39,10 +39,10 @@ import (
 	"github.com/vimrak-hal/worktree-integrator/internal/core/git/worktree"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/hooks"
 	coreserver "github.com/vimrak-hal/worktree-integrator/internal/core/server"
+	"github.com/vimrak-hal/worktree-integrator/internal/core/wtenv"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/childio"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/fscopy"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/statedir"
-	"github.com/vimrak-hal/worktree-integrator/internal/infra/wtenv"
 )
 
 // Selector は探索されたリポジトリのうち操作対象とするものを選ぶ。空のスライス

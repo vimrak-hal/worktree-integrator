@@ -8,8 +8,8 @@ import (
 	"github.com/vimrak-hal/worktree-integrator/internal/core/config"
 	coreserver "github.com/vimrak-hal/worktree-integrator/internal/core/server"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/server/serverfake"
+	"github.com/vimrak-hal/worktree-integrator/internal/core/wtenv"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/testutil"
-	"github.com/vimrak-hal/worktree-integrator/internal/infra/wtenv"
 )
 
 // List は inventory・別名・稼働サーバーを 1 つのビューに統合する。壊れた

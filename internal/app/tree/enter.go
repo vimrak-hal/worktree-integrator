@@ -9,7 +9,7 @@ import (
 	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/create"
 	"github.com/vimrak-hal/worktree-integrator/internal/core/hooks"
-	"github.com/vimrak-hal/worktree-integrator/internal/infra/wtenv"
+	"github.com/vimrak-hal/worktree-integrator/internal/core/wtenv"
 )
 
 // EnterResult は `enter` の結果。
