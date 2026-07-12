@@ -1,6 +1,7 @@
 package tree
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,8 +86,8 @@ func TestEnterAfterHookFailureIsError(t *testing.T) {
 	d := newDeps(t, serverfake.New(), cfg, t.TempDir(), worktreesDir)
 
 	res, err := Enter(t.Context(), d, mustName(t, "feat-x"))
-	if err == nil {
-		t.Fatal("failing after hook should surface as an error")
+	if !errors.Is(err, hooks.ErrFailed) {
+		t.Fatalf("failing after hook should surface as hooks.ErrFailed, got %v", err)
 	}
 	if res == nil || len(res.Hooks) != 1 || res.Hooks[0].Status != "failed" {
 		t.Fatalf("res = %+v", res)

@@ -102,12 +102,19 @@ func Remove(ctx context.Context, d Deps, act action.Remove) (*RemoveResult, erro
 		return res, fmt.Errorf("サーバーを停止できなかったため削除を中断します: %w", stopErr)
 	}
 
+	// 各ステップの元エラーは Result の文字列フィールドとは別に、型・チェーンを
+	// 保ったまま集める（返すエラーで errors.Is（context.Canceled 等）が効くように）。
+	var errs []error
+
 	// ステップ 2: チェックアウトとブランチの削除。
 	allRemoved := true
 	for _, m := range members {
-		removal := removeMember(ctx, d, name, m, act.Force, act.KeepBranch)
+		removal, err := removeMember(ctx, d, name, m, act.Force, act.KeepBranch)
 		if !removal.Removed {
 			allRemoved = false
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", m.Repo, err))
 		}
 		res.Repos = append(res.Repos, removal)
 	}
@@ -131,18 +138,25 @@ func Remove(ctx context.Context, d Deps, act action.Remove) (*RemoveResult, erro
 		return dirty, nil
 	}); err != nil {
 		res.StateError = err.Error()
+		errs = append(errs, err)
 	}
 
 	// ステップ 4: 別名の削除。
 	if existed, err := d.Aliases.Remove(ctx, name); err != nil {
 		res.AliasError = err.Error()
+		errs = append(errs, err)
 	} else {
 		res.AliasRemoved = existed
 	}
 
 	// ステップ 5: ログの削除。ログファイル名は (repo, server, worktree) への単射
 	// エンコードなので、ファイル名だけからこの worktree のログを特定できる。
-	res.LogsRemoved, res.LogsError = removeLogs(d.Root.LogsDir(), name)
+	logsRemoved, logsErr := removeLogs(d.Root.LogsDir(), name)
+	res.LogsRemoved = logsRemoved
+	if logsErr != nil {
+		res.LogsError = logsErr.Error()
+		errs = append(errs, logsErr)
+	}
 
 	// ステップ 6: ルートディレクトリの削除。ネストした名前（feature/login）の場合、
 	// 空になった中間ディレクトリ（feature/）も worktrees_dir まで遡って片付ける
@@ -150,13 +164,14 @@ func Remove(ctx context.Context, d Deps, act action.Remove) (*RemoveResult, erro
 	if allRemoved {
 		if err := os.RemoveAll(root); err != nil {
 			res.RootError = err.Error()
+			errs = append(errs, err)
 		} else {
 			res.RootRemoved = true
 			removeEmptyParents(root, d.WorktreesDir)
 		}
 	}
 
-	return res, removeError(res)
+	return res, removeError(name, errs)
 }
 
 // removeEmptyParents は root の親ディレクトリを worktreesDir（自身は含まない）まで
@@ -172,7 +187,9 @@ func removeEmptyParents(root, worktreesDir string) {
 
 // removeMember は 1 つのメンバーのチェックアウトを削除し、続けてブランチを片付ける。
 // repo 操作ロックの下で行い、同じリポジトリへの並行する switch / stop と直列化する。
-func removeMember(ctx context.Context, d Deps, name string, m inventory.RepoEntry, force, keepBranch bool) RepoRemoval {
+// DTO（Error 文字列）とは別に元エラーも返す: 呼び出し元が型・チェーンを保ったまま
+// 集約できるようにするため（キャンセルの context.Canceled を errors.Is で判別可）。
+func removeMember(ctx context.Context, d Deps, name string, m inventory.RepoEntry, force, keepBranch bool) (RepoRemoval, error) {
 	out := RepoRemoval{Repo: m.Repo}
 	srcRepo := filepath.Join(d.ReposDir, m.Repo)
 	srcOK := git.IsWorkTree(srcRepo)
@@ -219,18 +236,19 @@ func removeMember(ctx context.Context, d Deps, name string, m inventory.RepoEntr
 	if err != nil {
 		out.Error = err.Error()
 	}
-	return out
+	return out, err
 }
 
 // removeLogs は logsDir 配下からこの worktree のログ（.prev 含む）を削除する。
-// このツールの命名規則に従わないファイルには触れない。
-func removeLogs(logsDir, worktree string) (removed []string, errText string) {
-	entries, err := os.ReadDir(logsDir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, ""
+// このツールの命名規則に従わないファイルには触れない。削除に失敗した分は元エラーを
+// errors.Join で連結して返す（呼び出し元が DTO 文字列化と型の保持を両方できるように）。
+func removeLogs(logsDir, worktree string) (removed []string, err error) {
+	entries, readErr := os.ReadDir(logsDir)
+	if errors.Is(readErr, fs.ErrNotExist) {
+		return nil, nil
 	}
-	if err != nil {
-		return nil, err.Error()
+	if readErr != nil {
+		return nil, readErr
 	}
 	var errs []error
 	for _, entry := range entries {
@@ -248,28 +266,16 @@ func removeLogs(logsDir, worktree string) (removed []string, errText string) {
 		}
 		removed = append(removed, path)
 	}
-	if err := errors.Join(errs...); err != nil {
-		errText = err.Error()
-	}
-	return removed, errText
+	return removed, errors.Join(errs...)
 }
 
-// removeError は Result に集約された各ステップの失敗を 1 つのエラーへまとめる。
-// 失敗が無ければ nil。
-func removeError(res *RemoveResult) error {
-	var errs []error
-	for _, r := range res.Repos {
-		if r.Error != "" {
-			errs = append(errs, fmt.Errorf("%s: %s", r.Repo, r.Error))
-		}
-	}
-	for _, e := range []string{res.StateError, res.AliasError, res.LogsError, res.RootError} {
-		if e != "" {
-			errs = append(errs, errors.New(e))
-		}
-	}
+// removeError は各後始末ステップで実際に起きたエラー（型・チェーンを保ったまま
+// 集めたもの）を 1 つへまとめる。失敗が無ければ nil。Result DTO の文字列フィールドと
+// は独立に元エラーを保つことで、キャンセル（context.Canceled）を呼び出し元が
+// errors.Is で判別でき、exit 130 が main の ctx フォールバックに頼らず自然に成立する。
+func removeError(worktree string, errs []error) error {
 	if len(errs) == 0 {
 		return nil
 	}
-	return fmt.Errorf("worktree %q の削除が完了しませんでした: %w", res.Worktree, errors.Join(errs...))
+	return fmt.Errorf("worktree %q の削除が完了しませんでした: %w", worktree, errors.Join(errs...))
 }

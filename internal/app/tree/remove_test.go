@@ -1,7 +1,9 @@
 package tree
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -266,6 +268,23 @@ func TestRemoveNestedNameCleansEmptyParents(t *testing.T) {
 	}
 	if _, err := os.Stat(worktreesDir); err != nil {
 		t.Fatal("worktrees_dir itself must survive")
+	}
+}
+
+// removeError は各ステップの元エラーを型ごと保つ（errors.Join で連結する）。member
+// 削除がキャンセルで中断しても返るエラーは errors.Is(context.Canceled) を満たし、
+// exit 130 は main の ctx.Err() フォールバックに頼らず自然に成立する（旧実装は DTO の
+// 文字列を errors.New で再構成しており、型・チェーンが失われていた）。
+func TestRemoveErrorPreservesErrorType(t *testing.T) {
+	err := removeError("feat-x", []error{fmt.Errorf("repo-a: %w", context.Canceled)})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("removeError should preserve context.Canceled, got %v", err)
+	}
+	if !strings.Contains(err.Error(), `worktree "feat-x" の削除が完了しませんでした`) {
+		t.Fatalf("message = %q", err.Error())
+	}
+	if removeError("feat-x", nil) != nil {
+		t.Fatal("failure が無ければ nil を返すべき")
 	}
 }
 

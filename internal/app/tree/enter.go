@@ -2,7 +2,6 @@ package tree
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 
@@ -40,7 +39,7 @@ func Enter(ctx context.Context, d Deps, name action.Name) (*EnterResult, error) 
 	after := hooks.Run(ctx, d.Config.Hooks.After, runCtx, d.ChildIO)
 	res.Hooks = create.HookOutcomes("after", after)
 	if hooks.AnyFatal(after) {
-		return res, errors.New("1 つ以上のフックが失敗しました")
+		return res, hooks.ErrFailed
 	}
 	return res, nil
 }

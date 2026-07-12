@@ -17,6 +17,7 @@
 package hooks
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/core/cmdspec"
@@ -114,6 +115,12 @@ func failed(name, detail string, allowFailure bool) Outcome {
 	}
 	return Outcome{Name: name, Status: status, Detail: detail}
 }
+
+// ErrFailed は 1 つ以上のフックが致命的に失敗したことを表す番兵エラー。フックを
+// 実行するワークフロー（create の after / after_worktree、enter の after）はこれを
+// 返すため、呼び出し元は errors.Is(err, hooks.ErrFailed) でフック失敗を判別できる
+// （エラーメッセージ文字列への依存を避ける）。
+var ErrFailed = errors.New("1 つ以上のフックが失敗しました")
 
 // AnyFatal は、いずれかの結果によって実行全体を失敗とすべきかどうかを返す。
 // これはどの結果を致命的とみなすかというドメイン上の判断であり、結果の整形

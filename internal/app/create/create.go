@@ -124,7 +124,7 @@ func Run(ctx context.Context, deps Deps, cfg action.Create) (*Result, error) {
 			after := hooks.Run(ctx, cfg.Hooks.After, runCtx, deps.ChildIO)
 			res.Hooks = appendHookOutcomes(res.Hooks, "after", after)
 			if hooks.AnyFatal(after) {
-				return res, errors.New("1 つ以上のフックが失敗しました")
+				return res, hooks.ErrFailed
 			}
 			return res, nil
 		}
@@ -206,7 +206,7 @@ func Run(ctx context.Context, deps Deps, cfg action.Create) (*Result, error) {
 		errs = append(errs, fmt.Errorf("%d 件のリポジトリで worktree を作成できませんでした", res.Failed))
 	}
 	if hooks.AnyFatal(afterWorktree) || hooks.AnyFatal(after) {
-		errs = append(errs, errors.New("1 つ以上のフックが失敗しました"))
+		errs = append(errs, hooks.ErrFailed)
 	}
 	return res, errors.Join(errs...)
 }

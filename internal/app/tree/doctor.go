@@ -119,6 +119,11 @@ type check interface {
 	Fix(ctx context.Context, env *checkEnv, f Finding) error
 }
 
+// errReportOnly は報告のみ（Fixable=false）のチェックの Fix が呼ばれた場合に返す
+// 番兵エラー。Doctor は Fixable な発見にしか Fix を呼ばないため通常は到達しないが、
+// check interface の契約を満たすため報告専用の各チェックが共有する。
+var errReportOnly = errors.New("報告のみのチェックです")
+
 // checks は実行順のチェック一覧。状態の掃除（1〜4）→ git の掃除（5）→ 報告のみの
 // 整合性検査（6〜7）の順。
 func checks() []check {
@@ -401,7 +406,7 @@ func (brokenRepos) Scan(ctx context.Context, env *checkEnv) ([]Finding, error) {
 }
 
 func (brokenRepos) Fix(context.Context, *checkEnv, Finding) error {
-	return errors.New("報告のみのチェックです")
+	return errReportOnly
 }
 
 // ----- チェック 7: 設定と実体の突き合わせ（報告のみ） -----
@@ -427,7 +432,7 @@ func (configWithoutRepo) Scan(_ context.Context, env *checkEnv) ([]Finding, erro
 }
 
 func (configWithoutRepo) Fix(context.Context, *checkEnv, Finding) error {
-	return errors.New("報告のみのチェックです")
+	return errReportOnly
 }
 
 // repoWithoutServers は repos_dir に実在するがサーバー設定（[repos.<name>.servers]）を
@@ -449,5 +454,5 @@ func (repoWithoutServers) Scan(_ context.Context, env *checkEnv) ([]Finding, err
 }
 
 func (repoWithoutServers) Fix(context.Context, *checkEnv, Finding) error {
-	return errors.New("報告のみのチェックです")
+	return errReportOnly
 }
