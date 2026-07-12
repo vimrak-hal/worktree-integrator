@@ -13,16 +13,19 @@ const (
 	colorRunning = lipgloss.Color("2") // 緑: 稼働中
 	colorWarn    = lipgloss.Color("3") // 黄: 警告
 	colorAccent  = lipgloss.Color("6") // シアン: 強調・フォーカス
+	// colorMuted は明るい黒（グレー）。ANSI 16 色の範囲内。faint(SGR 2) は端末により
+	// 減光されず視覚差が出ないため、非フォーカスの枠は faint ではなくこの明示的な色で示す。
+	colorMuted = lipgloss.Color("8") // 明るい黒（グレー）: 非フォーカスの枠・見出し
 )
 
 // スタイルは基本 16 色（ANSI）だけを使う。dev サーバーのログを見る端末は多様で
-// あり、256 色やトゥルーカラーを仮定しない。
+// あり、256 色やトゥルーカラーを仮定しない。背景色は端末テーマに追従させるため
+// 使わず、前景色・faint・bold だけで強調を表現する。
 var (
-	styFlag     = lipgloss.NewStyle().Foreground(colorAccent)
-	styHelp     = lipgloss.NewStyle().Faint(true)
-	styNote     = lipgloss.NewStyle().Foreground(colorWarn)
-	styErrNote  = lipgloss.NewStyle().Foreground(colorError)
-	stySelected = lipgloss.NewStyle().Reverse(true)
+	styFlag    = lipgloss.NewStyle().Foreground(colorAccent)
+	styHelp    = lipgloss.NewStyle().Faint(true)
+	styNote    = lipgloss.NewStyle().Foreground(colorWarn)
+	styErrNote = lipgloss.NewStyle().Foreground(colorError)
 
 	styLineError = lipgloss.NewStyle().Foreground(colorError)
 	styLineWarn  = lipgloss.NewStyle().Foreground(colorWarn)
@@ -32,10 +35,30 @@ var (
 	styMarkCrashed = lipgloss.NewStyle().Foreground(colorError)
 	styMarkStopped = lipgloss.NewStyle().Faint(true)
 
-	// ペインの見出し。フォーカス側は反転+太字、非フォーカス側は faint。どちらの
-	// ペインを操作しているかを一目で分かるようにする。
-	styPaneTitle      = lipgloss.NewStyle().Faint(true)
-	styPaneTitleFocus = lipgloss.NewStyle().Reverse(true).Bold(true)
+	// ペインの角丸ボーダー。フォーカスの概念は廃止したため全ペイン（WORKTREES・イベント・
+	// ログ）とも常にグレー（colorMuted）で描く。「いま何に効くか」はツリーの ▌ カーソルと
+	// ダイアログの存在で示す。faint(SGR 2) は減光しない端末があるため明示的な色（グレー）を使う。
+	styBorder = lipgloss.NewStyle().Foreground(colorMuted)
+
+	// ペイン見出し（上辺のボーダーへ埋め込む文字列）。ボーダーと揃えて常にグレー。
+	styPaneTitle = lipgloss.NewStyle().Foreground(colorMuted)
+
+	// フローティングダイアログ（フォーム・doctor）の角丸ボーダーと見出し。周囲のグレーな
+	// ペインから浮かせるためアクセント色（colorAccent）で描き、見出しはアクセント太字。
+	// 旧フォーカス用スタイル（styBorderFocus / styPaneTitleFocus）の転用。
+	styDialogBorder = lipgloss.NewStyle().Foreground(colorAccent)
+	styDialogTitle  = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+
+	// ツリーの選択行。反転はやめ、行頭に colorAccent の ▌ インジケータを立て、行本文は
+	// 太字にする（非選択行は行頭 1 桁の空白で整列を保つ）。
+	stySelIndicator = lipgloss.NewStyle().Foreground(colorAccent)
+	stySelText      = lipgloss.NewStyle().Bold(true)
+
+	// ログ見出しのフラグを表すピル（バッジ）。背景色は使わず文字色のみ: 追従停止=黄、
+	// 前世代/フィルタ=シアン、読取失敗=赤。
+	styPillWarn   = lipgloss.NewStyle().Foreground(colorWarn)
+	styPillAccent = lipgloss.NewStyle().Foreground(colorAccent)
+	styPillError  = lipgloss.NewStyle().Foreground(colorError)
 )
 
 // colorizeLog はログの 1 行にレベル推定の色付けをする。構造化ログではないため

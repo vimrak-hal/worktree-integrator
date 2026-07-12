@@ -17,15 +17,16 @@ import (
 // キー文字列（WithHelp の第 1 引数）は現行 helpLine の文言を再現するための見た目
 // であり、実効キーには影響しない。
 type keyMap struct {
-	// --- 共通（フォーカスやプロンプトに依らず効く） ---
+	// --- 共通（プロンプトに依らず効く） ---
 	Quit   kb.Binding
-	Focus  kb.Binding // ペイン切替（実キー: tab/left/right/h/l）
 	Doctor kb.Binding
 
-	// --- ツリー（左ペイン） ---
+	// --- ツリー ---
 	Up           kb.Binding // 表示は "j/k 選択"（Down と対で 1 項目に見せる）
 	Down         kb.Binding
 	Collapse     kb.Binding // worktree 見出しの折りたたみトグル（space）
+	CollapseNode kb.Binding // 折りたたむ（h / ←）
+	ExpandNode   kb.Binding // 展開する（l / →）
 	NextWorktree kb.Binding // 次の worktree 見出しへ（J）
 	PrevWorktree kb.Binding // 前の worktree 見出しへ（K）
 	SwitchTo     kb.Binding
@@ -36,7 +37,7 @@ type keyMap struct {
 	Alias        kb.Binding
 	Refresh      kb.Binding
 
-	// --- ログ（右ペイン） ---
+	// --- ログ（フォーカス廃止によりグローバル。ダイアログ非表示中はどこでも効く） ---
 	Follow      kb.Binding
 	Filter      kb.Binding
 	Prev        kb.Binding
@@ -45,8 +46,8 @@ type keyMap struct {
 	Bottom      kb.Binding
 	HalfDown    kb.Binding
 	HalfUp      kb.Binding
-	LineDown    kb.Binding
-	LineUp      kb.Binding // 表示は "j/k スクロール"
+	LineDown    kb.Binding // ダイアログ（doctor）内スクロール専用。通常ログでは廃止（j/k はツリー）
+	LineUp      kb.Binding
 	ClearFilter kb.Binding
 
 	// --- フィルタ・doctor 結果（表示にも matching にも使う） ---
@@ -55,27 +56,22 @@ type keyMap struct {
 	Confirm kb.Binding
 	Cancel  kb.Binding
 	Fix     kb.Binding
-
-	// --- 表示専用（フォーカス切替の文脈別ラベル） ---
-	// 現行 helpLine の「Tab→ログ」「Tab→ツリー」という文脈依存ラベルを再現する。
-	// matching は Focus が担うため、これらは help への露出のためだけに存在する
-	// （help はキーの無い Binding を描画しないので実キーを 1 つ持たせている）。
-	FocusToLog  kb.Binding
-	FocusToTree kb.Binding
 }
 
 // newKeyMap は全バインドを構築する。
 func newKeyMap() keyMap {
 	return keyMap{
 		Quit:   kb.NewBinding(kb.WithKeys("q"), kb.WithHelp("q", "終了")),
-		Focus:  kb.NewBinding(kb.WithKeys("tab", "left", "right", "h", "l"), kb.WithHelp("Tab", "ペイン切替")),
 		Doctor: kb.NewBinding(kb.WithKeys("!"), kb.WithHelp("!", "doctor")),
 
 		Up:   kb.NewBinding(kb.WithKeys("k", "up"), kb.WithHelp("j/k", "選択")),
 		Down: kb.NewBinding(kb.WithKeys("j", "down"), kb.WithHelp("j/k", "選択")),
 		// Collapse の実効キーは半角スペース。KeyMsg.String() は KeySpace / スペース rune の
 		// どちらでも " " になるため、" " で一意に照合できる。
-		Collapse:     kb.NewBinding(kb.WithKeys(" "), kb.WithHelp("Space", "折りたたみ")),
+		Collapse: kb.NewBinding(kb.WithKeys(" "), kb.WithHelp("Space", "折りたたみ")),
+		// 旧フォーカス切替キー（h/l/←/→）は空いたのでツリーの折りたたみ/展開へ割り当てる。
+		CollapseNode: kb.NewBinding(kb.WithKeys("h", "left"), kb.WithHelp("h/l", "折/展")),
+		ExpandNode:   kb.NewBinding(kb.WithKeys("l", "right"), kb.WithHelp("h/l", "折/展")),
 		NextWorktree: kb.NewBinding(kb.WithKeys("J"), kb.WithHelp("J/K", "wt 移動")),
 		PrevWorktree: kb.NewBinding(kb.WithKeys("K"), kb.WithHelp("J/K", "wt 移動")),
 		SwitchTo:     kb.NewBinding(kb.WithKeys("enter", "s"), kb.WithHelp("Enter/s", "switch")),
@@ -101,21 +97,18 @@ func newKeyMap() keyMap {
 		Confirm: kb.NewBinding(kb.WithKeys("enter"), kb.WithHelp("Enter", "確定/実行")),
 		Cancel:  kb.NewBinding(kb.WithKeys("esc"), kb.WithHelp("Esc", "中止/閉じる")),
 		Fix:     kb.NewBinding(kb.WithKeys("F"), kb.WithHelp("F", "--fix 実行")),
-
-		FocusToLog:  kb.NewBinding(kb.WithKeys("tab"), kb.WithHelp("Tab", "→ログ")),
-		FocusToTree: kb.NewBinding(kb.WithKeys("tab"), kb.WithHelp("Tab", "→ツリー")),
 	}
 }
 
-// newHelp はヘルプ行の描画器を作る。見た目を既存の styHelp（faint）に合わせ、区切りは
-// 現行 helpLine の 2 スペースに寄せる（help のデフォルトは色付き " • " 区切り）。
+// newHelp はヘルプ行の描画器を作る。charm 系ツール風に、キー部分を colorAccent の太字、
+// 説明を faint、項目区切りを faint の " · " にする（背景色は使わずテーマ追従を保つ）。
 func newHelp() help.Model {
 	h := help.New()
 	faint := lipgloss.NewStyle().Faint(true)
-	h.Styles.ShortKey = faint
+	h.Styles.ShortKey = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	h.Styles.ShortDesc = faint
 	h.Styles.ShortSeparator = faint
-	h.ShortSeparator = "  "
+	h.ShortSeparator = " · "
 	return h
 }
 
@@ -134,8 +127,9 @@ func staticHelp(keyLabel, desc string) kb.Binding {
 	return kb.NewBinding(kb.WithKeys("\x00"), kb.WithHelp(keyLabel, desc))
 }
 
-// contextBindings は現在の文脈（プロンプト各種 / doctor 結果 / フォーカス）で表示すべき
-// キーヘルプの並びを返す。項目・順序・日本語ラベルは移行前の helpLine を踏襲する。
+// contextBindings は現在の文脈（フォーム / フィルタ入力 / doctor ダイアログ / 通常）で
+// 表示すべきキーヘルプの並びを返す。フォーカスは廃止したため、通常時はツリーのキーと
+// グローバル化したログのキーを 1 行にまとめる（幅超過分は help.Model が … で省略する）。
 func (m *model) contextBindings() []kb.Binding {
 	// huh フォーム表示中は huh の操作を日本語で要約する（キーの実処理は huh 側。ここは
 	// 表示専用）。フォーカス中フィールドの型で並びを出し分け、Input・Confirm・
@@ -176,40 +170,29 @@ func (m *model) contextBindings() []kb.Binding {
 		return []kb.Binding{
 			m.keys.Fix,
 			withHelp(m.keys.LineUp, "j/k", "スクロール"),
+			withHelp(m.keys.HalfUp, "d/u", "半ページ"),
 			withHelp(m.keys.Top, "g/G", "先頭/末尾"),
 			withHelp(m.keys.Cancel, "Esc", "閉じる"),
 		}
 	}
-	if m.focus == focusTree {
-		return []kb.Binding{
-			m.keys.Up,           // "j/k 選択"
-			m.keys.NextWorktree, // "J/K wt 移動"（見出し間ジャンプ。Prev と対で 1 項目に見せる）
-			m.keys.Collapse,     // "Space 折りたたみ"
-			m.keys.SwitchTo,
-			m.keys.Restart,
-			m.keys.Stop,
-			m.keys.New,
-			m.keys.Delete,
-			m.keys.Alias,
-			m.keys.Doctor,
-			m.keys.Refresh,
-			m.keys.FocusToLog,
-			m.keys.Quit,
-		}
-	}
-	logBindings := []kb.Binding{
-		m.keys.LineUp, // "j/k スクロール"
+	// 通常時: ツリーのキー + グローバル化したログのキーを 1 行に。1 行に収まる主要キーへ
+	// 絞る（全キーは docs/tui.md の表を参照。幅超過分は help.Model が末尾から … で省略する）。
+	bindings := []kb.Binding{
+		m.keys.Up, // "j/k 選択"
+		withHelp(m.keys.CollapseNode, "h/l", "開閉"), // 折りたたみ/展開
+		m.keys.SwitchTo, // "Enter/s switch"
+		m.keys.New,
+		m.keys.Delete,
+		m.keys.Doctor,
 		m.keys.Follow,
 		m.keys.Filter,
 		m.keys.Prev,
-		m.keys.Wrap,
-		m.keys.Top, // "g/G"
 	}
 	if m.filter != "" {
 		// フィルタ適用中のみ解除キーを見せる（Esc でクリア）。未適用時に出すと Esc の
 		// 対象が無く誤解を招くため条件付き。
-		logBindings = append(logBindings, withHelp(m.keys.ClearFilter, "Esc", "フィルタ解除"))
+		bindings = append(bindings, withHelp(m.keys.ClearFilter, "Esc", "フィルタ解除"))
 	}
-	logBindings = append(logBindings, m.keys.FocusToTree, m.keys.Quit)
-	return logBindings
+	bindings = append(bindings, m.keys.Quit)
+	return bindings
 }

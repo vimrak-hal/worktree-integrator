@@ -7,10 +7,12 @@ import (
 
 	"github.com/charmbracelet/bubbles/help"
 	kb "github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/app"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/server"
@@ -18,15 +20,6 @@ import (
 	"github.com/vimrak-hal/worktree-integrator/internal/core/config"
 	coreserver "github.com/vimrak-hal/worktree-integrator/internal/core/server"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/statedir"
-)
-
-// focusID はキー入力を受けるペイン。lazygit 風に左（ツリー）と右（ログ）の 2 ペインを
-// Tab で行き来する。
-type focusID int
-
-const (
-	focusTree focusID = iota
-	focusLog
 )
 
 // promptMode は最前面のモーダル入力の種類。promptNone 以外のときはキー入力を
@@ -120,7 +113,6 @@ type model struct {
 
 	width, height int
 	ready         bool
-	focus         focusID
 
 	// --- ツリー（左ペイン） ---
 	trees    *tree.ListResult
@@ -183,21 +175,28 @@ type model struct {
 	formRepos   []string
 	formAlias   string
 	formConfirm bool
-	// doctorText / doctorMode は doctor 結果の右ペイン表示。doctorMode 中は vp の
-	// 内容が doctorText になる（rebuildLog が出し分ける）。
+	// doctorText / doctorMode は doctor 結果のフローティングダイアログ表示。doctorMode
+	// 中は dvp（ダイアログ専用のビューポート）が doctorText を描き、背後の右ペインは通常の
+	// ログ表示のまま残る。dvp は m.vp（ログ）とは別に持ち、doctor のスクロールがログ位置を
+	// 動かさないようにする。
 	doctorText []string
 	doctorMode bool
+	dvp        viewport.Model
 
 	// opRunning 中は新しい統合操作を受け付けない（1 つずつ実行する）。
 	opRunning bool
 	opLabel   string
+	// spin は opRunning 中だけ回す控えめなスピナー（MiniDot・colorAccent）。tick は
+	// startOp で開始し、opRunning が下りたら次の TickMsg で止める（無駄な再描画を避ける）。
+	spin spinner.Model
 	// quitAfterOp は操作中に終了要求があったことを表す（完了を待って終了する）。
 	quitAfterOp bool
-	// events はライフサイクル・作成進捗のイベント履歴。フッターには直近
-	// visibleEvents 件を時系列（上が古い順）で表示する。
+	// events はライフサイクル・作成進捗のイベント履歴。左カラム下のイベントボックスへ
+	// 直近 visibleEvents 件を時系列（新しいものが下）で表示する。
 	events []string
 
-	// note はフッターの一時メッセージ（直近の操作結果・警告）。
+	// note は状態行の一時メッセージ（直近の操作結果・警告）。イベントボックスの
+	// 1 行目（退避時はツリーボックス最下行）に出る。
 	note    string
 	noteErr bool
 }
@@ -206,6 +205,8 @@ func newModel(ctx context.Context, cfg *config.File, root statedir.Root, fw *for
 	input := textinput.New()
 	input.Prompt = "/"
 	input.Placeholder = "フィルタ（部分一致）"
+	sp := spinner.New(spinner.WithSpinner(spinner.MiniDot))
+	sp.Style = lipgloss.NewStyle().Foreground(colorAccent)
 	return &model{
 		ctx:       ctx,
 		root:      root,
@@ -213,10 +214,10 @@ func newModel(ctx context.Context, cfg *config.File, root statedir.Root, fw *for
 		fw:        fw,
 		keys:      newKeyMap(),
 		help:      newHelp(),
-		focus:     focusTree,
 		follow:    true,
 		wrap:      true,
 		input:     input,
+		spin:      sp,
 		tails:     map[string]*tailer{},
 		bufs:      map[string]*ring{},
 		collapsed: map[string]bool{},
@@ -233,12 +234,36 @@ func (m *model) leftW() int {
 	return clamp(m.width/3, 24, 40)
 }
 
-// rightW は右ペイン（ログ・フォーム）の表示幅。左ペインと区切り "│" を除いた残り。
-// ビューポート幅（Update の WindowSizeMsg で決まる幅）と同じ計算で、huh フォームの
-// 幅指定にも使う。
-func (m *model) rightW() int {
-	return max(1, m.width-m.leftW()-1)
+// dialogOuterW はフローティングダイアログ（フォーム）の外枠幅。幅 = min(64, width-6)。
+// 超狭小端末では負値・0 を 1 に丸めて panic を避ける（描画は borderTop が素の上辺に落ちる）。
+func (m *model) dialogOuterW() int {
+	w := min(64, m.width-6)
+	if w < 1 {
+		return 1
+	}
+	return w
 }
+
+// dialogInnerW はダイアログのボーダー内側幅（huh フォームの WithWidth と同じ）。
+func (m *model) dialogInnerW() int { return max(1, m.dialogOuterW()-2) }
+
+// dialogFormH は huh フォームの WithHeight の上限。画面より大きくならないようにするための
+// 天井であり、実際のダイアログ高さは描画時にフォーム内容へ合わせて切り詰める（末尾の空行を
+// 落とす）。
+func (m *model) dialogFormH() int { return max(3, m.height-6) }
+
+// doctorOuterW / doctorInnerW / doctorInnerH は doctor 結果ダイアログの寸法。幅 =
+// min(90, width-6)、内側高さ ≒ height-6-2（外枠 height-6 から上下ボーダーを引く）。
+func (m *model) doctorOuterW() int {
+	w := min(90, m.width-6)
+	if w < 1 {
+		return 1
+	}
+	return w
+}
+
+func (m *model) doctorInnerW() int { return max(1, m.doctorOuterW()-2) }
+func (m *model) doctorInnerH() int { return max(1, m.height-8) }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -247,8 +272,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// ヘルプ行の幅超過時の省略（…）を端末幅に合わせる。
 		m.help.Width = m.width
 		lw := m.leftW()
-		// クローム 3 行（ペインタイトル行・note 行・ヘルプ行）を除いた残りが本文。
-		w, h := max(1, m.width-lw-1), max(1, m.height-3)
+		// 右ペインの内側寸法。左ボックス幅 lw と右ボーダー 2 桁（左右）を引いた幅、
+		// 上下ボーダー 2 行 + ヘルプ行 1 行を引いた高さ（= ビューポートの寸法）。
+		w, h := max(1, m.width-lw-2), max(1, m.height-3)
 		if !m.ready {
 			m.vp = viewport.New(w, h)
 			m.ready = true
@@ -258,6 +284,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// 幅・高さの直接代入で YOffset を保ったまま更新できる。
 			m.vp.Width = w
 			m.vp.Height = h
+		}
+		// doctor ダイアログ表示中はその専用ビューポートも追従させ、内容を再折り返しする。
+		if m.doctorMode {
+			m.dvp.Width = m.doctorInnerW()
+			m.dvp.Height = m.doctorInnerH()
+			m.setDoctorContent()
 		}
 		m.rebuildLog()
 		return m, nil
@@ -270,6 +302,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case resolveTickMsg:
 		return m, tea.Batch(m.resolveCmd(), resolveTick())
+
+	case spinner.TickMsg:
+		// 実行中の間だけスピナーを進める。opRunning が下りたら転送せず tick を止め、
+		// 無駄な再描画を避ける（startOp が次の実行開始時に改めて回し始める）。
+		if !m.opRunning {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg)
+		return m, cmd
 
 	case treesTickMsg:
 		// 操作の実行中は worktree 一覧を触らない（完了時に取り直す）。
@@ -309,7 +351,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.repos = msg.res
 		m.formName = ""
 		m.formRepos = nil
-		m.form = newCreateForm(msg.res.Repos, &m.formName, &m.formRepos, m.rightW())
+		m.form = newCreateForm(msg.res.Repos, &m.formName, &m.formRepos, m.dialogInnerW()).WithHeight(m.dialogFormH())
 		m.formKind = formCreate
 		return m, m.form.Init()
 
@@ -330,10 +372,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(msg.doctorText) > 0 {
 			m.doctorText = msg.doctorText
 			m.doctorMode = true
-			m.rebuildLog()
-			// 直前のログ閲覧の YOffset を引き継ぐと、長い診断結果が途中／末尾から
-			// 表示される。診断は必ず先頭から読ませる。
-			m.vp.GotoTop()
+			// doctor は専用ダイアログ（dvp）で表示する。背後の右ペインはログのまま。
+			// 長い診断結果は必ず先頭から読ませる。
+			m.dvp = viewport.New(m.doctorInnerW(), m.doctorInnerH())
+			m.setDoctorContent()
+			m.dvp.GotoTop()
 		}
 		if m.quitAfterOp {
 			return m, tea.Quit
@@ -343,7 +386,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.resolveCmd(), m.treesCmd())
 
 	case tea.MouseMsg:
-		// フォーカスに関わらずホイールでログをスクロールする。上方向は追従を解除。
+		// ダイアログ表示中はホイールをそのダイアログへ。doctor はスクロール、フォームは無視。
+		if m.doctorMode {
+			var cmd tea.Cmd
+			m.dvp, cmd = m.dvp.Update(msg)
+			return m, cmd
+		}
+		if m.form != nil {
+			return m, nil
+		}
+		// ダイアログ非表示中はホイールでログをスクロールする。上方向は追従を解除。
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonWheelUp {
 			m.follow = false
 		}
@@ -363,8 +415,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateKey はキー入力をさばく。モーダル（プロンプト）と結果ペイン（doctor）を
-// 最優先で処理し、その後にグローバル・ペイン別のキーへ落とす。
+// updateKey はキー入力をさばく。ダイアログ（フォーム / フィルタ入力 / doctor 結果）を
+// 最優先で処理し、その後にグローバルキー・通常キー（ツリー + グローバル化したログ）へ
+// 落とす。フォーカスの概念は無い（ツリーのキーとログのキーは衝突しないため両方を通常
+// キーとして一括で受ける）。
 func (m *model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyCtrlC {
 		return m, tea.Quit
@@ -401,25 +455,11 @@ func (m *model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, tea.Quit
-	case kb.Matches(msg, m.keys.Focus):
-		m.toggleFocus()
-		return m, nil
 	case kb.Matches(msg, m.keys.Doctor):
 		return m.startOp("doctor", m.doctorCmd(false))
 	}
 
-	if m.focus == focusTree {
-		return m.updateTreeKey(msg)
-	}
-	return m.updateLogKey(msg)
-}
-
-func (m *model) toggleFocus() {
-	if m.focus == focusTree {
-		m.focus = focusLog
-	} else {
-		m.focus = focusTree
-	}
+	return m.updateNormalKey(msg)
 }
 
 // startOp は統合操作を 1 つずつ実行するためのガード。実行中なら弾いて note を出す。
@@ -431,7 +471,8 @@ func (m *model) startOp(label string, cmd tea.Cmd) (tea.Model, tea.Cmd) {
 	m.opRunning = true
 	m.opLabel = label
 	m.note, m.noteErr = "", false
-	return m, cmd
+	// スピナーの tick を開始する（opRunning の間だけ回り、完了で止まる）。
+	return m, tea.Batch(cmd, m.spin.Tick)
 }
 
 // updateFilterKey はフィルタ入力中のキー操作（ライブ反映）。
@@ -459,34 +500,38 @@ func (m *model) updateFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateDoctorKey は doctor 結果ペイン中のキー操作。q は終了ではなく結果を閉じる。
+// updateDoctorKey は doctor 結果ダイアログ中のキー操作。モーダルなので j/k・d/u・g/G を
+// すべてダイアログ内スクロールに使える（ツリー・ログとは衝突しない）。q / Esc は終了では
+// なくダイアログを閉じる。スクロールは専用の dvp に効き、背後のログ位置は動かさない。
 func (m *model) updateDoctorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case kb.Matches(msg, m.keys.Cancel), kb.Matches(msg, m.keys.Quit):
 		m.doctorMode = false
 		m.doctorText = nil
-		m.rebuildLog()
 	case kb.Matches(msg, m.keys.Fix):
 		return m.startOp("doctor", m.doctorCmd(true))
 	case kb.Matches(msg, m.keys.LineDown):
-		m.vp.ScrollDown(1)
+		m.dvp.ScrollDown(1)
 	case kb.Matches(msg, m.keys.LineUp):
-		m.vp.ScrollUp(1)
+		m.dvp.ScrollUp(1)
 	case kb.Matches(msg, m.keys.HalfDown):
-		m.vp.HalfPageDown()
+		m.dvp.HalfPageDown()
 	case kb.Matches(msg, m.keys.HalfUp):
-		m.vp.HalfPageUp()
+		m.dvp.HalfPageUp()
 	case kb.Matches(msg, m.keys.Top):
-		m.vp.GotoTop()
+		m.dvp.GotoTop()
 	case kb.Matches(msg, m.keys.Bottom):
-		m.vp.GotoBottom()
+		m.dvp.GotoBottom()
 	}
 	return m, nil
 }
 
-// updateTreeKey は左ペイン（ツリー）にフォーカスがあるときのキー操作。
-func (m *model) updateTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+// updateNormalKey はダイアログ非表示中の通常キー。ツリーのキーと、フォーカス廃止により
+// グローバル化したログのキーを 1 か所で受ける（両者は衝突しないため）。ログのスクロールは
+// j/k 1 行を廃止し、ホイールと d/u（半ページ）・g/G（先頭/末尾）で代替する。
+func (m *model) updateNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
+	// --- ツリー ---
 	case kb.Matches(msg, m.keys.Down):
 		return m, m.moveSel(1)
 	case kb.Matches(msg, m.keys.Up):
@@ -499,6 +544,12 @@ func (m *model) updateTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case kb.Matches(msg, m.keys.Collapse):
 		m.toggleCollapse()
+		return m, nil
+	case kb.Matches(msg, m.keys.CollapseNode):
+		m.setCollapsed(true)
+		return m, nil
+	case kb.Matches(msg, m.keys.ExpandNode):
+		m.setCollapsed(false)
 		return m, nil
 	case kb.Matches(msg, m.keys.SwitchTo):
 		if wt, ok := m.selectedWorktree(); ok {
@@ -528,7 +579,7 @@ func (m *model) updateTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if wt, ok := m.selectedWorktree(); ok {
 			m.promptTarget = wt
 			m.formConfirm = false
-			m.form = newRemoveForm(wt, &m.formConfirm, m.rightW())
+			m.form = newRemoveForm(wt, &m.formConfirm, m.dialogInnerW()).WithHeight(m.dialogFormH())
 			m.formKind = formRemove
 			return m, m.form.Init()
 		}
@@ -536,17 +587,12 @@ func (m *model) updateTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if wt, ok := m.selectedWorktree(); ok {
 			m.promptTarget = wt
 			m.formAlias = m.selectedAlias()
-			m.form = newAliasForm(&m.formAlias, m.rightW())
+			m.form = newAliasForm(&m.formAlias, m.dialogInnerW()).WithHeight(m.dialogFormH())
 			m.formKind = formAlias
 			return m, m.form.Init()
 		}
-	}
-	return m, nil
-}
 
-// updateLogKey は右ペイン（ログ）にフォーカスがあるときのキー操作。
-func (m *model) updateLogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch {
+	// --- ログ（グローバル） ---
 	case kb.Matches(msg, m.keys.Follow):
 		m.follow = !m.follow
 		if m.follow {
@@ -579,12 +625,6 @@ func (m *model) updateLogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.vp.GotoTop()
 	case kb.Matches(msg, m.keys.Bottom):
 		m.vp.GotoBottom()
-	case kb.Matches(msg, m.keys.LineDown):
-		m.follow = false
-		m.vp.ScrollDown(1)
-	case kb.Matches(msg, m.keys.LineUp):
-		m.follow = false
-		m.vp.ScrollUp(1)
 	case kb.Matches(msg, m.keys.HalfDown):
 		m.follow = false
 		m.vp.HalfPageDown()
@@ -633,10 +673,21 @@ func (m *model) toggleCollapse() {
 	if !ok {
 		return
 	}
+	m.setCollapsed(!m.worktreeCollapsed(wt))
+}
+
+// setCollapsed はカーソル位置の worktree（サーバーノード上ならその親 worktree）の折りたたみを
+// want に明示指定する（h=折りたたむ→true、l=展開→false）。既に want の状態なら何もしない。
+// toggleCollapse と同じく、サーバーノード上から折りたたむとカーソルを見出しへ移す。
+func (m *model) setCollapsed(want bool) {
+	wt, ok := m.selectedWorktree()
+	if !ok {
+		return
+	}
 	onServer := !m.nodes[m.sel].isWorktree()
-	m.collapsed[wt] = !m.worktreeCollapsed(wt)
+	m.collapsed[wt] = want
 	m.buildNodes()
-	if onServer && m.collapsed[wt] {
+	if onServer && want {
 		m.selectWorktreeHeading(wt)
 	}
 }
@@ -951,22 +1002,20 @@ func (m *model) pollTail() bool {
 	return true
 }
 
-// rebuildLog は現在の選択・フィルタ（または doctor 結果）からビューポートの内容を
-// 組み立て直す。
+// setDoctorContent は doctor ダイアログ専用ビューポート（dvp）へ診断テキストを流し込む。
+// 長い行は横あふれを避けるため常にダイアログ幅で折り返す（doctor は w トグルの対象外）。
+func (m *model) setDoctorContent() {
+	lines := make([]string, len(m.doctorText))
+	for i, l := range m.doctorText {
+		lines[i] = wrapDisplay(l, m.dvp.Width)
+	}
+	m.dvp.SetContent(strings.Join(lines, "\n"))
+}
+
+// rebuildLog は現在の選択・フィルタからログビューポート（m.vp）の内容を組み立て直す。
+// doctor 結果は専用ダイアログ（dvp）で描くため、ここでは分岐しない（右ペインは常にログ）。
 func (m *model) rebuildLog() {
 	if !m.ready {
-		return
-	}
-	if m.doctorMode {
-		lines := m.doctorText
-		if m.wrap {
-			wrapped := make([]string, len(lines))
-			for i, l := range lines {
-				wrapped[i] = wrapDisplay(l, m.vp.Width)
-			}
-			lines = wrapped
-		}
-		m.vp.SetContent(strings.Join(lines, "\n"))
 		return
 	}
 	if m.curKey == "" {
