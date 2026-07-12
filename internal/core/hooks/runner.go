@@ -93,26 +93,30 @@ func execute(ctx context.Context, hook *Hook, run *wtenv.RunContext, repo *wtenv
 	err := proc.Run(hookCtx, hook.Command.Script(), dir, wtenv.Environ(os.Environ(), env), streams)
 	closeStreams()
 
-	if err != nil {
+	if err == nil {
+		return succeeded(hook.Name)
+	}
+	// キャンセルで殺されたフックも "signal: killed" を報告するため、中断・期限超過・
+	// 異常終了の切り分けは proc.Classify に委ねる（親 ctx とこのフック専用の hookCtx を
+	// 渡す）。結果を hooks の語彙（タイムアウト / キャンセル / 異常終了 / 起動失敗）へ写す。
+	kind, _ := proc.Classify(ctx, hookCtx, err)
+	switch kind {
+	case proc.ResultTimedOut:
 		// タイムアウトによる強制終了は、単なるキャンセルとは別の理由として報告する。
-		// 判定は hookCtx（このフック専用の期限）を先に見る: 親 ctx がキャンセルされて
-		// いない限り、期限切れは timeout_secs の超過を意味する。
-		if errors.Is(hookCtx.Err(), context.DeadlineExceeded) {
-			return failed(hook.Name,
-				fmt.Sprintf("タイムアウト（%d 秒）のため強制終了しました", hook.TimeoutSecs), hook.AllowFailure)
-		}
-		// キャンセルで殺されたフックは "signal: killed" を報告する。何が起きたかが
-		// 分かるよう、ctx 起因の失敗はキャンセルとして明示する。
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return failed(hook.Name, "canceled: "+ctxErr.Error(), hook.AllowFailure)
-		}
+		return failed(hook.Name,
+			fmt.Sprintf("タイムアウト（%d 秒）のため強制終了しました", hook.TimeoutSecs), hook.AllowFailure)
+	case proc.ResultCanceled:
+		// 何が起きたかが分かるよう、ctx 起因の失敗はキャンセルとして明示する。
+		return failed(hook.Name, "canceled: "+ctx.Err().Error(), hook.AllowFailure)
+	case proc.ResultExitNonZero:
+		// 終了状況（"exit status N" / "signal: ..."）をそのまま見せるため、元の
+		// *exec.ExitError を取り出して整形する。
 		var exit *exec.ExitError
-		if errors.As(err, &exit) {
-			return failed(hook.Name, fmt.Sprintf("exited unsuccessfully (%s)", exit), hook.AllowFailure)
-		}
+		_ = errors.As(err, &exit)
+		return failed(hook.Name, fmt.Sprintf("exited unsuccessfully (%s)", exit), hook.AllowFailure)
+	default: // ResultStartFailed
 		return failed(hook.Name, "failed to run: "+err.Error(), hook.AllowFailure)
 	}
-	return succeeded(hook.Name)
 }
 
 // taggedStreams は cio の Stdout/Stderr を、hook 名でタグ付けした行単位の出力に

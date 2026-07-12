@@ -65,16 +65,18 @@ func (u *UnixProcess) RunForeground(ctx context.Context, script, cwd string, env
 	if err == nil {
 		return true, nil
 	}
-	// キャンセルで殺されたコマンドは *exec.ExitError（"signal: killed"）を報告
-	// するため、「実行はされたが 0 以外で終了した」に紛れないよう ctx を先に見る。
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return false, fmt.Errorf("run command `%s`: %w", script, ctxErr)
-	}
-	var exit *exec.ExitError
-	if errors.As(err, &exit) {
+	// キャンセルで殺されたコマンドも *exec.ExitError（"signal: killed"）を報告する
+	// ため、「実行はされたが 0 以外で終了した」との判別は proc.Classify に委ねる
+	// （ここは per-job の期限を持たないので parent と child に同じ ctx を渡す）。
+	kind, _ := proc.Classify(ctx, ctx, err)
+	switch kind {
+	case proc.ResultCanceled, proc.ResultTimedOut:
+		return false, fmt.Errorf("run command `%s`: %w", script, ctx.Err())
+	case proc.ResultExitNonZero:
 		return false, nil // 実行はされたが、0 以外で終了した
+	default: // ResultStartFailed
+		return false, fmt.Errorf("run command `%s`: %w", script, err)
 	}
-	return false, fmt.Errorf("run command `%s`: %w", script, err)
 }
 
 // SpawnDetached は長時間稼働するサーバーを自身のセッションで起動する。

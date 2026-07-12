@@ -191,6 +191,87 @@ func TestRunStreams(t *testing.T) {
 	}
 }
 
+// TestClassifyOK は、正常終了（err==nil、親も child もキャンセルなし）が ResultOK と
+// 分類されることを確認する。
+func TestClassifyOK(t *testing.T) {
+	kind, code := proc.Classify(context.Background(), context.Background(), nil)
+	if kind != proc.ResultOK {
+		t.Fatalf("Classify(nil) = %v, want ResultOK", kind)
+	}
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+}
+
+// TestClassifyCanceled は、親 ctx がキャンセルされていれば、たとえ子が
+// *exec.ExitError（"signal: killed"）を返していても ResultCanceled になり、この
+// 判定が ExitError より優先されることを確認する。
+func TestClassifyCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	// 実プロセスの kill による ExitError を用意しても、親キャンセルが優先される。
+	killed := exec.Command("sh", "-c", "kill -TERM $$").Run()
+	kind, _ := proc.Classify(ctx, ctx, killed)
+	if kind != proc.ResultCanceled {
+		t.Fatalf("Classify(canceled parent) = %v, want ResultCanceled", kind)
+	}
+}
+
+// TestClassifyTimedOut は、親はキャンセルされていないが child の期限が切れている場合に
+// ResultTimedOut になり、キャンセルと区別されることを確認する。
+func TestClassifyTimedOut(t *testing.T) {
+	// 既に過ぎた期限を持つ child（DeadlineExceeded を即座に報告する）。
+	child, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Hour))
+	defer cancel()
+	killed := exec.Command("sh", "-c", "kill -TERM $$").Run()
+	kind, _ := proc.Classify(context.Background(), child, killed)
+	if kind != proc.ResultTimedOut {
+		t.Fatalf("Classify(expired child) = %v, want ResultTimedOut", kind)
+	}
+}
+
+// TestClassifyExitNonZero は、キャンセルも期限超過もない 0 以外の終了が
+// ResultExitNonZero と分類され、終了コードが抽出されることを確認する。
+func TestClassifyExitNonZero(t *testing.T) {
+	err := exec.Command("sh", "-c", "exit 3").Run()
+	kind, code := proc.Classify(context.Background(), context.Background(), err)
+	if kind != proc.ResultExitNonZero {
+		t.Fatalf("Classify(exit 3) = %v, want ResultExitNonZero", kind)
+	}
+	if code != 3 {
+		t.Fatalf("exit code = %d, want 3", code)
+	}
+}
+
+// TestClassifyStartFailed は、実行自体に失敗した（*exec.ExitError ではない）エラーが
+// ResultStartFailed と分類されることを確認する。
+func TestClassifyStartFailed(t *testing.T) {
+	err := exec.Command("worktree-integrator-no-such-binary-9f3c").Run()
+	if err == nil {
+		t.Fatal("spawning a non-existent binary should fail")
+	}
+	kind, _ := proc.Classify(context.Background(), context.Background(), err)
+	if kind != proc.ResultStartFailed {
+		t.Fatalf("Classify(spawn failure) = %v, want ResultStartFailed", kind)
+	}
+}
+
+// TestResultKindString は、封印列挙の識別名が安定していることを固定する。
+func TestResultKindString(t *testing.T) {
+	cases := map[proc.ResultKind]string{
+		proc.ResultOK:          "OK",
+		proc.ResultCanceled:    "Canceled",
+		proc.ResultTimedOut:    "TimedOut",
+		proc.ResultExitNonZero: "ExitNonZero",
+		proc.ResultStartFailed: "StartFailed",
+	}
+	for k, want := range cases {
+		if got := k.String(); got != want {
+			t.Errorf("%d.String() = %q, want %q", int(k), got, want)
+		}
+	}
+}
+
 // TestIdentZeroNeverMatches は、開始時刻を採取できなかった Ident（StartUnixMs=0）が
 // 生きているプロセスと一致しないことを確認する（SpawnDetached の即死フォールバックの
 // 前提: Alive が必ず false になり、即死検出に進む）。
