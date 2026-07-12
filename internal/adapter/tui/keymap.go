@@ -3,7 +3,7 @@ package tui
 import (
 	"github.com/charmbracelet/bubbles/help"
 	kb "github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/huh"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -132,41 +132,18 @@ func staticHelp(keyLabel, desc string) kb.Binding {
 // グローバル化したログのキーを 1 行にまとめる（幅超過分は help.Model が … で省略する）。
 func (m *model) contextBindings() []kb.Binding {
 	// huh フォーム表示中は huh の操作を日本語で要約する（キーの実処理は huh 側。ここは
-	// 表示専用）。フォーカス中フィールドの型で並びを出し分け、Input・Confirm・
-	// MultiSelect で実際に効くキーだけを見せる。
-	if m.form != nil {
-		switch m.form.GetFocusedField().(type) {
-		case *huh.Input:
-			return []kb.Binding{
-				staticHelp("Tab/Enter", "次へ"),
-				staticHelp("Shift+Tab", "戻る"),
-				staticHelp("Esc", "中止"),
-			}
-		case *huh.Confirm:
-			return []kb.Binding{
-				staticHelp("←/→", "選択"),
-				staticHelp("Enter", "確定"),
-				staticHelp("Esc", "中止"),
-			}
-		default:
-			// MultiSelect（作成先リポジトリ選択）ほか。
-			return []kb.Binding{
-				staticHelp("↑/↓", "移動"),
-				staticHelp("space/x", "選択"),
-				staticHelp("ctrl+a", "全選択"),
-				staticHelp("Enter", "確定"),
-				staticHelp("Esc", "中止"),
-			}
-		}
+	// 表示専用）。フォーム状態は formController に問い合わせ、開いていればその並びを使う。
+	if b, ok := m.forms.contextBindings(); ok {
+		return b
 	}
-	if m.prompt == promptFilter {
+	if m.log.prompt == promptFilter {
 		return []kb.Binding{
 			staticHelp("入力でフィルタ", ""),
 			withHelp(m.keys.Confirm, "Enter", "確定"),
 			withHelp(m.keys.ClearFilter, "Esc", "解除"),
 		}
 	}
-	if m.doctorMode {
+	if m.doctor.doctorMode {
 		return []kb.Binding{
 			m.keys.Fix,
 			withHelp(m.keys.LineUp, "j/k", "スクロール"),
@@ -188,11 +165,170 @@ func (m *model) contextBindings() []kb.Binding {
 		m.keys.Filter,
 		m.keys.Prev,
 	}
-	if m.filter != "" {
+	if m.log.filter != "" {
 		// フィルタ適用中のみ解除キーを見せる（Esc でクリア）。未適用時に出すと Esc の
 		// 対象が無く誤解を招くため条件付き。
 		bindings = append(bindings, withHelp(m.keys.ClearFilter, "Esc", "フィルタ解除"))
 	}
 	bindings = append(bindings, m.keys.Quit)
 	return bindings
+}
+
+// updateKey はキー入力をさばく。ダイアログ（フォーム / フィルタ入力 / doctor 結果）を
+// 最優先で処理し、その後にグローバルキー・通常キー（ツリー + グローバル化したログ）へ
+// 落とす。フォーカスの概念は無い（ツリーのキーとログのキーは衝突しないため両方を通常
+// キーとして一括で受ける）。Update から KeyMsg のルーティング先として呼ばれる。
+func (m *model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.Type == tea.KeyCtrlC {
+		return m, tea.Quit
+	}
+
+	// huh フォーム表示中は Ctrl-C 以外の全キーをフォームが消費する。ただし Esc は
+	// この層で横取りする: MultiSelect のフィルタ入力中だけは huh に渡し（フィルタ
+	// 確定/解除）、それ以外は TUI がフォーム中止として畳む。huh の KeyMap.Quit に esc を
+	// 足す方式だと、フィルタ入力中の Esc までフォーム全体の中止に化けて入力済みの内容が
+	// 消えるため、フォーカス中フィールドの状態をここで判定する。
+	if m.forms.form != nil {
+		if msg.Type == tea.KeyEsc && !formFiltering(m.forms.form) {
+			m.forms.clear()
+			return m, nil
+		}
+		return m.updateForm(msg)
+	}
+
+	if m.log.prompt == promptFilter {
+		return m, m.log.updateFilterKey(msg)
+	}
+
+	if m.doctor.doctorMode {
+		return m.updateDoctorKey(msg)
+	}
+
+	switch {
+	case kb.Matches(msg, m.keys.Quit):
+		if m.op.opRunning {
+			// 操作の途中で抜けると中断されるため、完了を待つ（強制終了は Ctrl-C）。
+			m.op.quitAfterOp = true
+			m.op.note, m.op.noteErr = "実行中の操作の完了を待って終了します…（強制終了は Ctrl-C）", false
+			return m, nil
+		}
+		return m, tea.Quit
+	case kb.Matches(msg, m.keys.Doctor):
+		return m.startOp("doctor", m.doctorCmd(false))
+	}
+
+	return m.updateNormalKey(msg)
+}
+
+// updateDoctorKey は doctor 結果ダイアログ中のキー操作。モーダルなので j/k・d/u・g/G を
+// すべてダイアログ内スクロールに使える（ツリー・ログとは衝突しない）。q / Esc は終了では
+// なくダイアログを閉じる。スクロールは専用の dvp に効き、背後のログ位置は動かさない。
+func (m *model) updateDoctorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case kb.Matches(msg, m.keys.Cancel), kb.Matches(msg, m.keys.Quit):
+		m.doctor.close()
+	case kb.Matches(msg, m.keys.Fix):
+		return m.startOp("doctor", m.doctorCmd(true))
+	case kb.Matches(msg, m.keys.LineDown):
+		m.doctor.dvp.ScrollDown(1)
+	case kb.Matches(msg, m.keys.LineUp):
+		m.doctor.dvp.ScrollUp(1)
+	case kb.Matches(msg, m.keys.HalfDown):
+		m.doctor.dvp.HalfPageDown()
+	case kb.Matches(msg, m.keys.HalfUp):
+		m.doctor.dvp.HalfPageUp()
+	case kb.Matches(msg, m.keys.Top):
+		m.doctor.dvp.GotoTop()
+	case kb.Matches(msg, m.keys.Bottom):
+		m.doctor.dvp.GotoBottom()
+	}
+	return m, nil
+}
+
+// updateNormalKey はダイアログ非表示中の通常キー。ツリーのキーと、フォーカス廃止により
+// グローバル化したログのキーを 1 か所で受ける（両者は衝突しないため）。ログのスクロールは
+// j/k 1 行を廃止し、ホイールと d/u（半ページ）・g/G（先頭/末尾）で代替する。
+func (m *model) updateNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	// --- ツリー ---
+	case kb.Matches(msg, m.keys.Down):
+		return m, m.moveSel(1)
+	case kb.Matches(msg, m.keys.Up):
+		return m, m.moveSel(-1)
+	case kb.Matches(msg, m.keys.NextWorktree):
+		m.tree.jumpWorktree(1)
+		return m, nil
+	case kb.Matches(msg, m.keys.PrevWorktree):
+		m.tree.jumpWorktree(-1)
+		return m, nil
+	case kb.Matches(msg, m.keys.Collapse):
+		m.tree.toggleCollapse(m.cfg)
+		return m, nil
+	case kb.Matches(msg, m.keys.CollapseNode):
+		m.tree.setCollapsed(m.cfg, true)
+		return m, nil
+	case kb.Matches(msg, m.keys.ExpandNode):
+		m.tree.setCollapsed(m.cfg, false)
+		return m, nil
+	case kb.Matches(msg, m.keys.SwitchTo):
+		if wt, ok := m.tree.selectedWorktree(); ok {
+			return m.startOp("switch "+wt, m.switchCmd(wt, false))
+		}
+	case kb.Matches(msg, m.keys.Restart):
+		if wt, ok := m.tree.selectedWorktree(); ok {
+			return m.startOp("switch --restart "+wt, m.switchCmd(wt, true))
+		}
+	case kb.Matches(msg, m.keys.Stop):
+		if wt, ok := m.tree.selectedWorktree(); ok {
+			return m.startOp("stop "+wt, m.stopCmd(wt))
+		}
+	case kb.Matches(msg, m.keys.Refresh):
+		return m, m.treesCmd()
+	case kb.Matches(msg, m.keys.New):
+		if m.op.opRunning {
+			// フォームを入力し終えてから弾かれる無駄を防ぐため、候補取得の発行前に
+			// opRunning を弾く。R（treesCmd）は読み取り専用なのでガード不要。
+			m.op.note, m.op.noteErr = "別の操作を実行中です", true
+			return m, nil
+		}
+		// reposMsg 受信で作成フォームを開く（名前とリポジトリ選択は 1 枚のフォームに
+		// 統合されている）。
+		return m, m.reposCmd()
+	case kb.Matches(msg, m.keys.Delete):
+		if wt, ok := m.tree.selectedWorktree(); ok {
+			return m, m.forms.openRemove(wt, m.dialogInnerW(), m.dialogFormH())
+		}
+	case kb.Matches(msg, m.keys.Alias):
+		if wt, ok := m.tree.selectedWorktree(); ok {
+			return m, m.forms.openAlias(wt, m.tree.selectedAlias(), m.dialogInnerW(), m.dialogFormH())
+		}
+
+	// --- ログ（グローバル） ---
+	case kb.Matches(msg, m.keys.Follow):
+		m.log.toggleFollow()
+	case kb.Matches(msg, m.keys.Filter):
+		m.log.beginFilter()
+	case kb.Matches(msg, m.keys.Prev):
+		m.log.prev = !m.log.prev
+		// パスが変わる（.prev ⇔ 現行）ため即座に再解決する。tailer は
+		// applyResolved のパス変化検出でリセットされる。
+		return m, m.resolveCmd()
+	case kb.Matches(msg, m.keys.Wrap):
+		m.log.wrap = !m.log.wrap
+		m.log.rebuild()
+	case kb.Matches(msg, m.keys.ClearFilter):
+		m.log.clearFilter()
+	case kb.Matches(msg, m.keys.Top):
+		m.log.follow = false
+		m.log.vp.GotoTop()
+	case kb.Matches(msg, m.keys.Bottom):
+		m.log.vp.GotoBottom()
+	case kb.Matches(msg, m.keys.HalfDown):
+		m.log.follow = false
+		m.log.vp.HalfPageDown()
+	case kb.Matches(msg, m.keys.HalfUp):
+		m.log.follow = false
+		m.log.vp.HalfPageUp()
+	}
+	return m, nil
 }

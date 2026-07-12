@@ -359,9 +359,9 @@ func (o appOps) Doctor(cfg *config.File, fix bool) tea.Msg {
 // resolveCmd は再解決コマンドを返す。世代（resolveSeq）の前進は Update の単一 goroutine で
 // 行い（ここでのインクリメントは競合しない）、以降の全戻り値にこの seq を載せる。
 func (m *model) resolveCmd() tea.Cmd {
-	m.resolveSeq++
-	seq := m.resolveSeq
-	lastCfg, prev, curKey := m.cfg, m.prev, m.curKey
+	m.log.resolveSeq++
+	seq := m.log.resolveSeq
+	lastCfg, prev, curKey := m.cfg, m.log.prev, m.log.curKey
 	return func() tea.Msg { return m.ops.Resolve(lastCfg, prev, curKey, seq) }
 }
 

@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 
+	kb "github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 
@@ -19,6 +20,111 @@ const (
 	formAlias
 	formRemove
 )
+
+// formController は最前面の huh フォーム（作成・別名・削除確認）とそのバインド値を持つ。
+// form が非 nil の間はキー入力をフォームが最優先で消費し、完了時に finishForm が値を取り
+// 出して dispatch する。値は各 form* フィールドへポインタでバインドされる。フォームを開く・
+// ヘルプ行を出す・ダイアログを描くのはここに閉じ、完了時の操作 dispatch（startOp を伴う
+// 横断処理）はルートの finishForm が担う。
+type formController struct {
+	form        *huh.Form
+	formKind    formKind
+	formName    string
+	formRepos   []string
+	formAlias   string
+	formConfirm bool
+	// promptTarget は alias / remove フォームの対象 worktree 名（フォームを開いた
+	// 時点のカーソル位置を固定して保持する）。
+	promptTarget string
+	repos        *app.ReposResult
+}
+
+// openCreate は worktree 作成フォーム（名前入力 + リポジトリ複数選択）を開く（reposMsg 受信時）。
+func (fc *formController) openCreate(res *app.ReposResult, innerW, formH int) tea.Cmd {
+	fc.repos = res
+	fc.formName = ""
+	fc.formRepos = nil
+	fc.form = newCreateForm(res.Repos, &fc.formName, &fc.formRepos, innerW).WithHeight(formH)
+	fc.formKind = formCreate
+	return fc.form.Init()
+}
+
+// openAlias は別名フォームを開き、現在別名をプリフィルする（対象 worktree を固定して保持）。
+func (fc *formController) openAlias(wt, alias string, innerW, formH int) tea.Cmd {
+	fc.promptTarget = wt
+	fc.formAlias = alias
+	fc.form = newAliasForm(&fc.formAlias, innerW).WithHeight(formH)
+	fc.formKind = formAlias
+	return fc.form.Init()
+}
+
+// openRemove は削除確認フォームを開く（対象 worktree を固定して保持、既定は否定）。
+func (fc *formController) openRemove(wt string, innerW, formH int) tea.Cmd {
+	fc.promptTarget = wt
+	fc.formConfirm = false
+	fc.form = newRemoveForm(wt, &fc.formConfirm, innerW).WithHeight(formH)
+	fc.formKind = formRemove
+	return fc.form.Init()
+}
+
+// clear はフォームを畳む（form=nil・formKind=formNone）。完了・中止のいずれでも呼ぶ。
+func (fc *formController) clear() {
+	fc.form = nil
+	fc.formKind = formNone
+}
+
+// contextBindings はフォーム表示中のヘルプ行の並びを返す（表示専用。キーの実処理は huh 側）。
+// フォーカス中フィールドの型で並びを出し分け、Input・Confirm・MultiSelect で実際に効くキー
+// だけを見せる。2 番目の戻り値はフォームが開いているかどうかで、false ならルートは他の文脈を見る。
+func (fc *formController) contextBindings() ([]kb.Binding, bool) {
+	if fc.form == nil {
+		return nil, false
+	}
+	switch fc.form.GetFocusedField().(type) {
+	case *huh.Input:
+		return []kb.Binding{
+			staticHelp("Tab/Enter", "次へ"),
+			staticHelp("Shift+Tab", "戻る"),
+			staticHelp("Esc", "中止"),
+		}, true
+	case *huh.Confirm:
+		return []kb.Binding{
+			staticHelp("←/→", "選択"),
+			staticHelp("Enter", "確定"),
+			staticHelp("Esc", "中止"),
+		}, true
+	default:
+		// MultiSelect（作成先リポジトリ選択）ほか。
+		return []kb.Binding{
+			staticHelp("↑/↓", "移動"),
+			staticHelp("space/x", "選択"),
+			staticHelp("ctrl+a", "全選択"),
+			staticHelp("Enter", "確定"),
+			staticHelp("Esc", "中止"),
+		}, true
+	}
+}
+
+// formDialog はフォーム（作成・別名・削除確認）を中央フローティングダイアログの行の並びで
+// 組む。角丸ボーダー（colorAccent）+ 上辺にアクセント太字の種類見出し。高さは huh フォームの
+// 内容に合わせるため、フォーム描画の末尾の空行を落としてから箱に収める。
+func (fc *formController) formDialog(innerW, height int) []string {
+	label := "入力中"
+	switch fc.formKind {
+	case formCreate:
+		label = "worktree 作成"
+	case formAlias:
+		label = "別名"
+	case formRemove:
+		label = "削除の確認"
+	}
+	content := trimTrailingBlank(strings.Split(fc.form.View(), "\n"))
+	// 天井: 画面高から溢れないよう内容を切り詰める（ダイアログ + 上下ボーダーで height 未満に）。
+	if cap := max(1, height-4); len(content) > cap {
+		content = content[:cap]
+	}
+	return renderDialogBox(styDialogTitle.Render(label), content, innerW)
+}
 
 // formTheme は huh フォームの配色。基本 16 色（ANSI）だけを使う既存の見た目に
 // 馴染ませるため huh.ThemeBase() を土台にし、フォーカス中のタイトルだけを styFlag
@@ -91,22 +197,20 @@ func formFiltering(f *huh.Form) bool {
 // ここを通る（Update 末尾のフックを参照）。Ctrl-C は updateKey が先に処理するため、
 // ここには来ない。
 func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
-	form, cmd := m.form.Update(msg)
+	form, cmd := m.forms.form.Update(msg)
 	if f, ok := form.(*huh.Form); ok {
-		m.form = f
+		m.forms.form = f
 	}
-	switch m.form.State {
+	switch m.forms.form.State {
 	case huh.StateCompleted:
 		_, opCmd := m.finishForm()
-		m.form = nil
-		m.formKind = formNone
+		m.forms.clear()
 		return m, tea.Batch(cmd, opCmd)
 	case huh.StateAborted:
 		// フォーム中止（畳むだけで note は出さない）。今は Esc を updateKey が横取り
 		// してここへ来る前にフォームを畳むため、この分岐は huh が内部都合で Aborted へ
 		// 遷移した場合への防御として残す。
-		m.form = nil
-		m.formKind = formNone
+		m.forms.clear()
 		return m, cmd
 	}
 	return m, cmd
@@ -117,26 +221,26 @@ func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 // テストは formKind と値を直接セットしてから呼び、正しいコマンドが起動されることを
 // 検証できる。
 func (m *model) finishForm() (tea.Model, tea.Cmd) {
-	switch m.formKind {
+	switch m.forms.formKind {
 	case formCreate:
-		name := strings.TrimSpace(m.formName)
+		name := strings.TrimSpace(m.forms.formName)
 		if name == "" {
-			m.note, m.noteErr = "worktree 名を入力してください", true
+			m.op.note, m.op.noteErr = "worktree 名を入力してください", true
 			return m, nil
 		}
-		if len(m.formRepos) == 0 {
-			m.note, m.noteErr = "リポジトリを 1 つ以上選択してください", true
+		if len(m.forms.formRepos) == 0 {
+			m.op.note, m.op.noteErr = "リポジトリを 1 つ以上選択してください", true
 			return m, nil
 		}
-		repos := append([]string(nil), m.formRepos...)
+		repos := append([]string(nil), m.forms.formRepos...)
 		return m.startOp("create "+name, m.createCmd(name, repos))
 	case formAlias:
-		label := strings.TrimSpace(m.formAlias)
-		name := m.promptTarget
+		label := strings.TrimSpace(m.forms.formAlias)
+		name := m.forms.promptTarget
 		return m.startOp("alias "+name, m.aliasCmd(name, label))
 	case formRemove:
-		if m.formConfirm {
-			return m.startOp("remove "+m.promptTarget, m.removeCmd(m.promptTarget))
+		if m.forms.formConfirm {
+			return m.startOp("remove "+m.forms.promptTarget, m.removeCmd(m.forms.promptTarget))
 		}
 		return m, nil
 	}

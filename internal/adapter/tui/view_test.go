@@ -17,12 +17,12 @@ import (
 func TestViewShowsBothPanes(t *testing.T) {
 	m := newTestModel(t)
 	m.cfg = serverCfg()
-	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}}})
+	m.tree.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}}})
 	m.buildNodes()
-	m.curKey = "feat-a\x00api/backend"
-	m.bufs[m.curKey] = newRing(10)
-	m.bufs[m.curKey].push("hello-log-line")
-	m.rebuildLog()
+	m.log.curKey = "feat-a\x00api/backend"
+	m.log.bufs[m.log.curKey] = newRing(10)
+	m.log.bufs[m.log.curKey].push("hello-log-line")
+	m.log.rebuild()
 
 	view := m.View()
 	for _, want := range []string{
@@ -47,10 +47,10 @@ func TestViewShowsBothPanes(t *testing.T) {
 func TestEventBoxShowsEvents(t *testing.T) {
 	m := newTestModel(t)
 	m.cfg = serverCfg()
-	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}}})
+	m.tree.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}}})
 	m.buildNodes()
-	m.events = []string{"created feat-a", "switched to backend"}
-	m.note = "作成しました"
+	m.op.events = []string{"created feat-a", "switched to backend"}
+	m.op.note = "作成しました"
 
 	view := m.View()
 	lines := strings.Split(view, "\n")
@@ -85,11 +85,11 @@ func TestEventBoxShowsEvents(t *testing.T) {
 func TestLowTerminalHidesEventBox(t *testing.T) {
 	m := newTestModel(t)
 	m.cfg = serverCfg()
-	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}},
+	m.tree.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}},
 		Servers: []tree.ServerCell{{Repo: "api", Server: "backend", Pid: 4242}}})
 	m.buildNodes()
-	m.events = []string{"created feat-a"}
-	m.note = "作成しました"
+	m.op.events = []string{"created feat-a"}
+	m.op.note = "作成しました"
 	// イベントボックス + ツリー最低 3 行を確保できない低い端末。
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 10})
 
@@ -152,13 +152,13 @@ func TestBorderColorsGreyPanesAccentDialog(t *testing.T) {
 func TestViewLogPillsAndNoReverse(t *testing.T) {
 	m := newTestModel(t)
 	m.cfg = serverCfg()
-	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}}})
+	m.tree.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}}})
 	m.buildNodes()
-	m.curKey = "feat-a\x00api/backend"
-	m.bufs[m.curKey] = newRing(10)
-	m.follow = true
-	m.prev = true
-	m.rebuildLog()
+	m.log.curKey = "feat-a\x00api/backend"
+	m.log.bufs[m.log.curKey] = newRing(10)
+	m.log.follow = true
+	m.log.prev = true
+	m.log.rebuild()
 
 	view := m.View()
 	if strings.Contains(view, "追従停止") {
@@ -171,7 +171,7 @@ func TestViewLogPillsAndNoReverse(t *testing.T) {
 		t.Error("リデザイン後の View は反転（\\x1b[7m）を使わない")
 	}
 
-	m.follow = false
+	m.log.follow = false
 	view = m.View()
 	if !strings.Contains(view, "[追従停止]") {
 		t.Error("追従を解除しても [追従停止] が出ない")
@@ -186,26 +186,26 @@ func TestViewTinyTerminalNoPanic(t *testing.T) {
 	} {
 		m := newTestModel(t)
 		m.cfg = serverCfg()
-		m.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}},
+		m.tree.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}},
 			Servers: []tree.ServerCell{{Repo: "api", Server: "backend", Pid: 4242}}})
 		m.buildNodes()
-		m.curKey = "feat-a\x00api/backend"
-		m.bufs[m.curKey] = newRing(10)
-		m.bufs[m.curKey].push("some-log-line")
-		m.opRunning = true // フッターのスピナー行も含めて描く
-		m.note = "とても長い一時メッセージが狭い左ペインでも panic しないこと"
+		m.log.curKey = "feat-a\x00api/backend"
+		m.log.bufs[m.log.curKey] = newRing(10)
+		m.log.bufs[m.log.curKey].push("some-log-line")
+		m.op.opRunning = true // フッターのスピナー行も含めて描く
+		m.op.note = "とても長い一時メッセージが狭い左ペインでも panic しないこと"
 		m.Update(tea.WindowSizeMsg{Width: sz.w, Height: sz.h})
 		if got := m.View(); got == "" {
 			t.Errorf("View(%dx%d) は非空を返すべき", sz.w, sz.h)
 		}
 		// ダイアログが画面より大きくなりうる狭小端末でも、オーバーレイ合成が panic しない。
-		m.formAlias = ""
-		m.form = newAliasForm(&m.formAlias, m.dialogInnerW())
-		m.formKind = formAlias
+		m.forms.formAlias = ""
+		m.forms.form = newAliasForm(&m.forms.formAlias, m.dialogInnerW())
+		m.forms.formKind = formAlias
 		if got := m.View(); got == "" {
 			t.Errorf("フォームダイアログ表示中の View(%dx%d) は非空を返すべき", sz.w, sz.h)
 		}
-		m.form, m.formKind = nil, formNone
+		m.forms.form, m.forms.formKind = nil, formNone
 		m.Update(opDoneMsg{summary: "doctor", doctorText: []string{"line-a", "line-b"}})
 		if got := m.View(); got == "" {
 			t.Errorf("doctor ダイアログ表示中の View(%dx%d) は非空を返すべき", sz.w, sz.h)
@@ -220,19 +220,19 @@ func TestCollapsedHeadingAggregateMarks(t *testing.T) {
 	m := newTestModel(t)
 	m.cfg = serverCfg()
 	// backend 稼働 + web 停止（クラッシュ 0）。明示的に折りたたむ。
-	m.collapsed = map[string]bool{"feat-x": true}
-	m.trees = treesResult(
+	m.tree.collapsed = map[string]bool{"feat-x": true}
+	m.tree.trees = treesResult(
 		tree.WorktreeRow{Name: "feat-x", Repos: []tree.RepoCell{{Repo: "api"}},
 			Servers: []tree.ServerCell{{Repo: "api", Server: "backend", Pid: 4242}}},
 	)
 	m.buildNodes()
-	if len(m.nodes) != 1 || !m.nodes[0].collapsed {
-		t.Fatalf("明示折りたたみで見出しのみになるべき: %+v", m.nodes)
+	if len(m.tree.nodes) != 1 || !m.tree.nodes[0].collapsed {
+		t.Fatalf("明示折りたたみで見出しのみになるべき: %+v", m.tree.nodes)
 	}
 
 	// 選択行: 行頭に ▌ インジケータ、▸ と 稼働1・停止1 の集約。0 件のクラッシュは出ない。
-	m.sel = 0
-	sel := m.nodeLine(0, m.nodes[0])
+	m.tree.sel = 0
+	sel := m.tree.nodeLine(0, m.tree.nodes[0])
 	for _, want := range []string{"▌", "▸", "feat-x", "●1", "○1"} {
 		if !strings.Contains(sel, want) {
 			t.Errorf("選択折りたたみ見出しに %q が無い: %q", want, sel)
@@ -243,8 +243,8 @@ func TestCollapsedHeadingAggregateMarks(t *testing.T) {
 	}
 
 	// 非選択行にはインジケータが立たず、同じ集約が状態色で出る。
-	m.sel = -1
-	colored := m.nodeLine(0, m.nodes[0])
+	m.tree.sel = -1
+	colored := m.tree.nodeLine(0, m.tree.nodes[0])
 	for _, want := range []string{"▸", "●1", "○1"} {
 		if !strings.Contains(colored, want) {
 			t.Errorf("非選択折りたたみ見出しに %q が無い: %q", want, colored)
@@ -289,12 +289,12 @@ func TestHelpLineMergedContext(t *testing.T) {
 func TestDoctorDialogShowsResult(t *testing.T) {
 	m := newTestModel(t)
 	m.cfg = serverCfg()
-	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}}})
+	m.tree.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}}})
 	m.buildNodes()
-	m.curKey = "feat-a\x00api/backend"
-	m.bufs[m.curKey] = newRing(10)
-	m.bufs[m.curKey].push("hello-log-line")
-	m.rebuildLog()
+	m.log.curKey = "feat-a\x00api/backend"
+	m.log.bufs[m.log.curKey] = newRing(10)
+	m.log.bufs[m.log.curKey].push("hello-log-line")
+	m.log.rebuild()
 	// doctor 結果へ遷移（ダイアログ用ビューポートを組む）。
 	m.Update(opDoneMsg{summary: "doctor 完了", doctorText: []string{"問題は見つかりませんでした"}})
 
@@ -316,17 +316,17 @@ func TestDoctorDialogShowsResult(t *testing.T) {
 func TestDialogOverlayCentered(t *testing.T) {
 	m := newTestModel(t)
 	m.cfg = serverCfg()
-	m.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}}})
+	m.tree.trees = treesResult(tree.WorktreeRow{Name: "feat-a", Repos: []tree.RepoCell{{Repo: "api"}}})
 	m.buildNodes()
-	m.curKey = "feat-a\x00api/backend"
-	m.bufs[m.curKey] = newRing(10)
-	m.rebuildLog()
+	m.log.curKey = "feat-a\x00api/backend"
+	m.log.bufs[m.log.curKey] = newRing(10)
+	m.log.rebuild()
 
 	// 別名フォームを中央ダイアログとして開く（Init でフィールドが描画される）。
-	m.formAlias = "ログイン画面"
-	m.form = newAliasForm(&m.formAlias, m.dialogInnerW())
-	m.formKind = formAlias
-	m.form.Init()
+	m.forms.formAlias = "ログイン画面"
+	m.forms.form = newAliasForm(&m.forms.formAlias, m.dialogInnerW())
+	m.forms.formKind = formAlias
+	m.forms.form.Init()
 
 	view := m.View()
 	lines := strings.Split(view, "\n")
