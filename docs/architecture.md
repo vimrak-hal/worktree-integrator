@@ -15,8 +15,8 @@ Go の標準的なレイアウト（`cmd/` + `internal/`）に従い、責務ご
 flowchart TB
     adapter["adapter\ncli ・ clirun ・ mcpserver ・ tui ・ render"]
     app["app\naction ・ create ・ server ・ tree"]
-    core["core\nconfig ・ git ・ hooks ・ server ・ alias ・ wtenv"]
-    infra["infra\nstore ・ statedir ・ childio ・ fscopy ・ proc ・ procctl"]
+    core["core\nconfig ・ cmdspec ・ git ・ hooks ・ inventory ・ server ・ alias ・ wtenv"]
+    infra["infra\nstore ・ statedir ・ parallel ・ childio ・ fscopy ・ proc ・ procctl"]
     adapter --> app
     adapter --> core
     adapter --> infra
@@ -38,6 +38,7 @@ internal/
   ── app（アプリケーション層）──
   app/          全ワークフロー共通の依存を束ね、型付きメソッドで各ワークフローを駆動。別名操作と repo 一覧も持つ
     action/     解決済みコマンドの語彙と、フロントエンド入力からの解決。CLI / MCP / TUI が共有
+      actiontest/ 検証済み action.Name をテストで構築する共通ヘルパー（テスト専用）
     create/     worktree 作成ワークフロー（探索 → 選択 → 並列作成 → コピー → フック）
     server/     サーバーライフサイクルのワークフロー（switch / status / stop / logs）
     tree/       worktree ライフサイクルの残り（list / enter / remove / doctor）
@@ -50,7 +51,7 @@ internal/
     git/        ローカル git コマンドの薄いラッパー（fetch / worktree add・prune / ls-files など）
       repo/       repos_dir 配下の Git リポジトリ検出
       worktree/   1 リポジトリ分の処理（fetch → worktree 作成）と並列実行・進捗
-    hooks/      フック定義・結果型と、タイミング単位の並列実行
+    hooks/      フック定義・結果型と、タイミング単位の並列実行。結果の表示語彙（Report）も所有し、render / --json / MCP がこれを共有する
     inventory/  worktrees_dir の実体スキャン（list / doctor / create / remove が共有）
     server/     サーバー設定スキーマ・プロセス制御インターフェースと状態機械・切替 / 停止 / 状態ロジック
       serverfake/ プロセスに触れない ProcessControl のインメモリダブル（テスト専用）
@@ -59,10 +60,11 @@ internal/
   infra/
     childio/    子プロセスの標準ストリームの接続先（CLI は端末、MCP は stderr / devnull）
     fscopy/     追加ファイルの worktree へのコピー（シンボリックリンク安全）
+    parallel/   有界・順序保存・キャンセル対応の並列実行の共通機構（worktree 作成とフック実行が共有）
     proc/       プロセス同一性トークン（Ident）と sh -c 実行の純機構（OS 依存の開始時刻取得）
     procctl/    server のプロセス制御実装。detach 起動とプロセスグループへのシグナル送出
-    statedir/   状態ディレクトリ（$XDG_STATE_HOME）のパス解決
-    store/      ロック付き・アトミック・バージョン付き TOML 永続化（server 状態と alias が共有）
+    statedir/   状態ディレクトリ（$XDG_STATE_HOME）のパス解決と、リポジトリ単位の操作ロック（WithRepoLock）
+    store/      ロック付き・アトミック・バージョン付き TOML 永続化（server 状態と alias が共有）。共有ロックヘルパー（AcquireLock）は statedir の操作ロックも支える
     testutil/   テスト用のローカル Git リポジトリ生成ヘルパー
 ```
 
@@ -96,7 +98,8 @@ internal/
   主体で CPU バウンドではないため、`-j` 未指定時は
   `min(選択リポジトリ数, CPU コア数 × 4 を 4〜16 にクランプした値)` を上限とします。
   1 リポジトリの失敗は他を止めず、進捗出力は直列化され、結果はリクエスト順に集約
-  されます。
+  されます。この「有界・順序保存・キャンセル対応」の骨格と自動上限（`parallel.AutoLimit`）
+  は `infra/parallel` に一本化され、worktree の並列作成とフックの並列実行が共有します。
 - **状態の永続化**: `servers.toml` と `aliases.toml` は共有の `store.File[T]` に
   委譲し、排他アドバイザリロック（flock）＋一時ファイル作成＋ rename でアトミックに
   書き込みます。
