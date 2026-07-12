@@ -104,21 +104,46 @@ func concurrency(override int, file *config.File, getenv func(string) string) (i
 	return 0, nil
 }
 
+// CreateInput は NewCreate への入力をまとめた構造体である。フロントエンドが与える
+// 生の入力（Name / Repos / All / Base）、優先されるオーバーライド（Overrides）、および
+// 解決の材料となる設定ファイルと環境（File / Getenv / Home）を平坦なフィールドで持つ。
+// 位置引数の羅列を避け、呼び出し側がフィールド名で意図を明示できるようにする。
+type CreateInput struct {
+	// Name は作成する worktree（およびブランチ）の未検証の生名（NewCreate が検証する）。
+	Name string
+	// Repos は --repo / MCP の repos で明示されたリポジトリ名。空かつ All が false なら
+	// 対話選択となる。
+	Repos []string
+	// All はすべての探索済みリポジトリを対象とする（CLI の --all）。
+	All bool
+	// Base は --base フラグ / MCP の base パラメータ。空は「未指定」を意味する。
+	Base string
+	// Overrides はフロントエンドが明示的に与える設定（環境・設定ファイル・既定値より
+	// 優先される）。
+	Overrides Overrides
+	// File は読み込み済みの設定ファイル。
+	File *config.File
+	// Getenv は環境変数の参照（os.Getenv の注入）。
+	Getenv func(string) string
+	// Home はホームディレクトリの解決（os.UserHomeDir の注入）。
+	Home func() (string, error)
+}
+
 // NewCreate は create ワークフローの設定をフロントエンドのオーバーライド・環境変数
 // （getenv 経由）・設定ファイルから解決する。worktree 名と、明示された各リポジトリ名を
 // 検証する（リポジトリの実在確認は探索結果を持つ app/create が行う）。base は CLI の
 // --base フラグ / MCP の base パラメータで、空文字列は「未指定」（[repos.<name>].base
 // → [defaults].base → "auto" へフォールスルー。解決は Create.BaseFor がリポジトリごとに
 // 行う）を意味する。
-func NewCreate(name string, repos []string, all bool, base string, ov Overrides, file *config.File, getenv func(string) string, home func() (string, error)) (Create, error) {
-	parsed, err := ParseName(name)
+func NewCreate(in CreateInput) (Create, error) {
+	parsed, err := ParseName(in.Name)
 	if err != nil {
 		return Create{}, err
 	}
-	if len(repos) > 0 && all {
+	if len(in.Repos) > 0 && in.All {
 		return Create{}, fmt.Errorf("--repo と --all は同時に指定できません")
 	}
-	for _, r := range repos {
+	for _, r := range in.Repos {
 		if err := validateRepoName(r); err != nil {
 			return Create{}, err
 		}
@@ -128,55 +153,73 @@ func NewCreate(name string, repos []string, all bool, base string, ov Overrides,
 	// 塞ぐ。検証の入口はこのコンストラクタに一元化し、CLI も MCP も必ずここを通す。
 	// 空の base は「未指定」（BaseFor がリポジトリごとに解決する）を意味するため素通しし、
 	// 参照しうる全ソース（フラグ / [defaults].base / [repos.<name>].base）を検証する。
-	if base != "" {
-		if err := validateBase(base); err != nil {
+	if in.Base != "" {
+		if err := validateBase(in.Base); err != nil {
 			return Create{}, err
 		}
 	}
-	if file.Defaults.Base != "" {
-		if err := validateBase(file.Defaults.Base); err != nil {
+	if in.File.Defaults.Base != "" {
+		if err := validateBase(in.File.Defaults.Base); err != nil {
 			return Create{}, fmt.Errorf("[defaults].base: %w", err)
 		}
 	}
-	for repoName, rc := range file.Repos {
+	for repoName, rc := range in.File.Repos {
 		if rc.Base != "" {
 			if err := validateBase(rc.Base); err != nil {
 				return Create{}, fmt.Errorf("[repos.%s].base: %w", repoName, err)
 			}
 		}
 	}
-	resolvedRemote := remote(ov.Remote, file, getenv)
+	resolvedRemote := remote(in.Overrides.Remote, in.File, in.Getenv)
 	if err := validateRemote(resolvedRemote); err != nil {
 		return Create{}, err
 	}
-	reposDir, err := ReposDir(ov.ReposDir, file, getenv, home)
+	reposDir, err := ReposDir(in.Overrides.ReposDir, in.File, in.Getenv, in.Home)
 	if err != nil {
 		return Create{}, err
 	}
-	worktreesDir, err := WorktreesDir(ov.WorktreesDir, file, getenv, home)
+	worktreesDir, err := WorktreesDir(in.Overrides.WorktreesDir, in.File, in.Getenv, in.Home)
 	if err != nil {
 		return Create{}, err
 	}
-	conc, err := concurrency(ov.Concurrency, file, getenv)
+	conc, err := concurrency(in.Overrides.Concurrency, in.File, in.Getenv)
 	if err != nil {
 		return Create{}, err
 	}
 	return Create{
 		WorktreeName: parsed,
-		Repos:        repos,
-		All:          all,
+		Repos:        in.Repos,
+		All:          in.All,
 		ReposDir:     reposDir,
 		WorktreesDir: worktreesDir,
 		Remote:       resolvedRemote,
 		// 0 は自動決定。実効的な並列度は選択されるリポジトリ数にも依存するため、
 		// 最終決定は worktree.Concurrency が行う。
 		Concurrency: conc,
-		Base:        base,
+		Base:        in.Base,
 		// Hooks・Defaults・RepoConfigs は設定ファイルからのみ取得される。
-		Hooks:       file.Hooks,
-		Defaults:    file.Defaults,
-		RepoConfigs: file.Repos,
+		Hooks:       in.File.Hooks,
+		Defaults:    in.File.Defaults,
+		RepoConfigs: in.File.Repos,
 	}, nil
+}
+
+// ServerCommandInput は NewServerCommand への入力をまとめた構造体である。
+// フロントエンドが与えるオーバーライドとリポジトリフィルタ、解決の材料となる設定
+// ファイルと環境を平坦なフィールドで持つ。旧シグネチャは ov が先頭・repos が末尾と
+// 引数順が非対称で NewCreate と揃わなかったため、構造体化して呼び出しの意図を明示する。
+type ServerCommandInput struct {
+	// Overrides はフロントエンドが明示的に与えるディレクトリのオーバーライド。
+	Overrides Overrides
+	// File は読み込み済みの設定ファイル。
+	File *config.File
+	// Getenv は環境変数の参照（os.Getenv の注入）。
+	Getenv func(string) string
+	// Home はホームディレクトリの解決（os.UserHomeDir の注入）。
+	Home func() (string, error)
+	// Repos は --repo / MCP の repos による対象リポジトリの絞り込み。空はすべての
+	// 設定済みリポジトリを意味する。
+	Repos []string
 }
 
 // NewServerCommand は server コマンドの共通実行コンテキストをフロントエンドの
@@ -184,24 +227,24 @@ func NewCreate(name string, repos []string, all bool, base string, ov Overrides,
 // フィルタの各名前を検証する。適用されるのはディレクトリのオーバーライドのみで
 // ある（server コマンドにはリモートや並列度がない）。操作（ServerKind）は App の
 // 型付きメソッドへ別途渡される。
-func NewServerCommand(ov Overrides, file *config.File, getenv func(string) string, home func() (string, error), repos []string) (ServerCommand, error) {
-	for _, r := range repos {
+func NewServerCommand(in ServerCommandInput) (ServerCommand, error) {
+	for _, r := range in.Repos {
 		if err := validateRepoName(r); err != nil {
 			return ServerCommand{}, err
 		}
 	}
-	reposDir, err := ReposDir(ov.ReposDir, file, getenv, home)
+	reposDir, err := ReposDir(in.Overrides.ReposDir, in.File, in.Getenv, in.Home)
 	if err != nil {
 		return ServerCommand{}, err
 	}
-	worktreesDir, err := WorktreesDir(ov.WorktreesDir, file, getenv, home)
+	worktreesDir, err := WorktreesDir(in.Overrides.WorktreesDir, in.File, in.Getenv, in.Home)
 	if err != nil {
 		return ServerCommand{}, err
 	}
 	return ServerCommand{
 		ReposDir:     reposDir,
 		WorktreesDir: worktreesDir,
-		Servers:      file.ServersConfig(),
-		Repos:        repos,
+		Servers:      in.File.ServersConfig(),
+		Repos:        in.Repos,
 	}, nil
 }

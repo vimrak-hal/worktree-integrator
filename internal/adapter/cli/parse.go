@@ -37,8 +37,8 @@ type Create struct {
 	All bool
 	// Base は --base で明示されたベースブランチ/ref のオーバーライド。空は
 	// 「未指定」（[repos.<name>].base → [defaults].base → "auto" へフォールスルー）。
-	Base string
-	Ov   action.Overrides
+	Base      string
+	Overrides action.Overrides
 	// Json は Result を JSON で出力する（表示形式の選択であり、action の語彙には
 	// 含めない）。
 	Json bool
@@ -86,8 +86,8 @@ type Repos struct {
 type Server struct {
 	Kind action.ServerKind
 	// Repos は --repo によるリポジトリの絞り込み。
-	Repos []string
-	Ov    action.Overrides
+	Repos     []string
+	Overrides action.Overrides
 	// FollowLogs は `server logs -f`（tail -f）。ログの追跡は CLI 専用の表示手段の
 	// ため action.LogsKind には存在せず、main が LogsResult のパス情報を受けて
 	// 自前で tail -f を実行する（MCP からは型レベルで到達不能）。
@@ -228,7 +228,7 @@ func addCreate(root *cobra.Command, result *Invocation) *cobra.Command {
 			ov := dirOverrides(c)
 			ov.Remote, _ = fs.GetString("remote")
 			ov.Concurrency, _ = fs.GetInt("concurrency")
-			*result = Create{Name: args[0], Repos: repos, All: all, Base: base, Ov: ov, Json: json}
+			*result = Create{Name: args[0], Repos: repos, All: all, Base: base, Overrides: ov, Json: json}
 			return nil
 		},
 	}
@@ -344,7 +344,7 @@ func addServer(root *cobra.Command, result *Invocation) {
 	build := func(c *cobra.Command, kind action.ServerKind) Server {
 		repos, _ := c.Flags().GetStringArray("repo")
 		json, _ := c.Flags().GetBool("json")
-		return Server{Kind: kind, Repos: repos, Ov: dirOverrides(c), Json: json}
+		return Server{Kind: kind, Repos: repos, Overrides: dirOverrides(c), Json: json}
 	}
 	// set は追従フラグを持たない操作（switch / status / stop）の保存を 1 行に畳む。
 	set := func(c *cobra.Command, kind action.ServerKind) {
@@ -461,7 +461,7 @@ func addAlias(root *cobra.Command, result *Invocation) {
 			if err != nil {
 				return err
 			}
-			set(action.AliasSet{Name: name, Value: args[1]})
+			set(action.AliasSet{Name: name, Label: args[1]})
 			return nil
 		},
 	}

@@ -179,11 +179,12 @@ type AliasKind interface {
 	isAliasKind()
 }
 
-// AliasSet は別名の設定。空のラベルはワークフロー（core/alias の Store.Set）が
-// エラーとして拒否する。削除は AliasRemove の 1 経路のみである。
+// AliasSet は別名の設定。Label が表示ラベル（server status の ALIAS 列に出る値）で
+// ある。空のラベルはワークフロー（core/alias の Store.Set）がエラーとして拒否する。
+// 削除は AliasRemove の 1 経路のみである。
 type AliasSet struct {
 	Name  Name
-	Value string
+	Label string
 }
 
 // AliasList はすべての別名の一覧（旧 alias get は list に統合された）。

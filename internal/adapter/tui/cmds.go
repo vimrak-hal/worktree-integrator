@@ -142,7 +142,11 @@ func buildApp(cfg *config.File, root statedir.Root, fw *forwarder) *app.App {
 // serverCommand は現在の設定から server 系ワークフローの実行コンテキストを解決する
 // （ディレクトリのオーバーライドは TUI に無い — 設定と WT_* 環境変数から解決する）。
 func serverCommand(cfg *config.File) (action.ServerCommand, error) {
-	return action.NewServerCommand(action.Overrides{}, cfg, os.Getenv, os.UserHomeDir, nil)
+	return action.NewServerCommand(action.ServerCommandInput{
+		File:   cfg,
+		Getenv: os.Getenv,
+		Home:   os.UserHomeDir,
+	})
 }
 
 // opStartFailed は統合操作を開始できなかったとき（前段の実行コンテキスト解決・対象名の
@@ -283,7 +287,13 @@ func (o appOps) Stop(cfg *config.File, name string) tea.Msg {
 // Create は worktree 作成を実行する。名前は入力済みの確定値、repos はモーダルで選択された
 // リポジトリ名。非対話（Selector: nil）のため、対象は明示された repos で決まる。
 func (o appOps) Create(cfg *config.File, name string, repos []string) tea.Msg {
-	act, err := action.NewCreate(name, repos, false, "", action.Overrides{}, cfg, os.Getenv, os.UserHomeDir)
+	act, err := action.NewCreate(action.CreateInput{
+		Name:   name,
+		Repos:  repos,
+		File:   cfg,
+		Getenv: os.Getenv,
+		Home:   os.UserHomeDir,
+	})
 	if err != nil {
 		return opStartFailed("create", err)
 	}

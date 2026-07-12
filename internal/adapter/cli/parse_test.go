@@ -58,8 +58,8 @@ func TestBareNameResolvesToCreateWithFlags(t *testing.T) {
 		t.Fatalf("name = %q", c.Name)
 	}
 	want := action.Overrides{ReposDir: "/r", WorktreesDir: "/w", Remote: "upstream", Concurrency: 4}
-	if c.Ov != want {
-		t.Fatalf("ov = %+v, want %+v", c.Ov, want)
+	if c.Overrides != want {
+		t.Fatalf("ov = %+v, want %+v", c.Overrides, want)
 	}
 }
 
@@ -72,8 +72,8 @@ func TestExplicitCreateSubcommand(t *testing.T) {
 // フラグ未指定の Overrides はゼロ値のまま（解決は action 側の責務）。
 func TestFallsBackToZeroOverrides(t *testing.T) {
 	c := createOf(t, parse(t, "feat"))
-	if c.Ov != (action.Overrides{}) {
-		t.Fatalf("ov = %+v", c.Ov)
+	if c.Overrides != (action.Overrides{}) {
+		t.Fatalf("ov = %+v", c.Overrides)
 	}
 	if len(c.Repos) != 0 || c.All {
 		t.Fatalf("selection = %+v", c)
@@ -425,7 +425,7 @@ func TestStopLogsEmptyNameIsError(t *testing.T) {
 
 func TestParsesAlias(t *testing.T) {
 	set, ok := aliasOf(t, parse(t, "alias", "set", "feat-x", "ABC-123: title")).Kind.(action.AliasSet)
-	if !ok || set.Name.String() != "feat-x" || set.Value != "ABC-123: title" {
+	if !ok || set.Name.String() != "feat-x" || set.Label != "ABC-123: title" {
 		t.Fatalf("set = %+v", set)
 	}
 	if _, ok := aliasOf(t, parse(t, "alias", "ls")).Kind.(action.AliasList); !ok {
@@ -456,8 +456,8 @@ func TestAliasSetRejectsInvalidName(t *testing.T) {
 func TestFlagScopes(t *testing.T) {
 	// server 系はディレクトリのフラグを受け付ける。
 	srv := serverOf(t, parse(t, "server", "status", "--worktrees-dir", "/w"))
-	if srv.Ov.WorktreesDir != "/w" {
-		t.Fatalf("ov = %+v", srv.Ov)
+	if srv.Overrides.WorktreesDir != "/w" {
+		t.Fatalf("ov = %+v", srv.Overrides)
 	}
 	// server 系は --remote / -j を受け付けない。
 	if _, err := Parse([]string{"server", "status", "--remote", "up"}); err == nil {

@@ -85,10 +85,18 @@ func actionCreateWorktrees(ctx context.Context, params CreateParams) (*create.Re
 		return nil, "", errors.New("`repos` を 1 つ以上指定してください（候補は repos_list で取得できます）")
 	}
 	return run(func(a *app.App) (*create.Result, error) {
-		act, err := action.NewCreate(params.WorktreeName, params.Repos, false, params.Base, action.Overrides{
-			Remote:      params.Remote,
-			Concurrency: params.Concurrency,
-		}, a.Config, os.Getenv, os.UserHomeDir)
+		act, err := action.NewCreate(action.CreateInput{
+			Name:  params.WorktreeName,
+			Repos: params.Repos,
+			Base:  params.Base,
+			Overrides: action.Overrides{
+				Remote:      params.Remote,
+				Concurrency: params.Concurrency,
+			},
+			File:   a.Config,
+			Getenv: os.Getenv,
+			Home:   os.UserHomeDir,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -221,5 +229,10 @@ func actionAliasRemove(ctx context.Context, params AliasNameParams) (string, err
 // serverCommand は server 系ツール共通のコマンドコンテキストを、ビルド済みの App の
 // 設定から構築する。
 func serverCommand(a *app.App, repos []string) (action.ServerCommand, error) {
-	return action.NewServerCommand(action.Overrides{}, a.Config, os.Getenv, os.UserHomeDir, repos)
+	return action.NewServerCommand(action.ServerCommandInput{
+		File:   a.Config,
+		Getenv: os.Getenv,
+		Home:   os.UserHomeDir,
+		Repos:  repos,
+	})
 }

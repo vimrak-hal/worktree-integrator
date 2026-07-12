@@ -79,15 +79,20 @@ func (s *Store) Get(ctx context.Context, worktree string) (string, bool, error) 
 	return v, ok, nil
 }
 
-// Set はロックのもとで worktree のエイリアスを設定し、保存された値を返す。
+// Set はロックのもとで worktree の表示ラベルを設定し、保存されたラベルを返す。
 //
-// 値は最初の 1 行に切り詰めてトリムされるため、複数行や余白を含むラベルが
-// ステータステーブルを乱すことはない。正規化の結果が空になる値はエラーとして
-// 拒否する。削除の経路は Remove の 1 本のみである（かつては空値を削除として
+// ラベルは最初の 1 行に切り詰めてトリムされるため、複数行や余白を含むラベルが
+// ステータステーブルを乱すことはない。正規化の結果が空になるラベルはエラーとして
+// 拒否する。削除の経路は Remove の 1 本のみである（かつては空ラベルを削除として
 // 扱っていたが、「設定」と「削除」が同じ操作に同居する暗黙の分岐を仕様ごと
 // 刈り込んだ）。
-func (s *Store) Set(ctx context.Context, worktree, value string) (stored string, err error) {
-	normalized := firstLineTrimmed(value)
+//
+// この「空ラベル = エラー」はストアの契約であり、TUI の別名フォームで空のまま
+// 送信したときに削除する挙動は、フロントエンド（adapter/tui）が空入力を検出して
+// Set ではなく Remove を呼び分けることで実現している（このメソッド自体は空ラベルを
+// 決して削除に読み替えない）。
+func (s *Store) Set(ctx context.Context, worktree, label string) (stored string, err error) {
+	normalized := firstLineTrimmed(label)
 	if normalized == "" {
 		return "", errors.New("空のラベルは設定できません。削除は alias rm を使ってください")
 	}

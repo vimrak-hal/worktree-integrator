@@ -31,7 +31,16 @@ import (
 func Run(ctx context.Context, inv cli.Invocation, a *app.App, stdout io.Writer) error {
 	switch v := inv.(type) {
 	case cli.Create:
-		act, err := action.NewCreate(v.Name, v.Repos, v.All, v.Base, v.Ov, a.Config, os.Getenv, os.UserHomeDir)
+		act, err := action.NewCreate(action.CreateInput{
+			Name:      v.Name,
+			Repos:     v.Repos,
+			All:       v.All,
+			Base:      v.Base,
+			Overrides: v.Overrides,
+			File:      a.Config,
+			Getenv:    os.Getenv,
+			Home:      os.UserHomeDir,
+		})
 		if err != nil {
 			return err
 		}
@@ -59,7 +68,13 @@ func Run(ctx context.Context, inv cli.Invocation, a *app.App, stdout io.Writer) 
 		return emit(stdout, v.Json, res, err, render.Repos)
 
 	case cli.Server:
-		cmd, err := action.NewServerCommand(v.Ov, a.Config, os.Getenv, os.UserHomeDir, v.Repos)
+		cmd, err := action.NewServerCommand(action.ServerCommandInput{
+			Overrides: v.Overrides,
+			File:      a.Config,
+			Getenv:    os.Getenv,
+			Home:      os.UserHomeDir,
+			Repos:     v.Repos,
+		})
 		if err != nil {
 			return err
 		}
@@ -133,7 +148,7 @@ func runServer(ctx context.Context, a *app.App, v cli.Server, cmd action.ServerC
 func runAlias(ctx context.Context, a *app.App, v cli.Alias, stdout io.Writer) error {
 	switch k := v.Kind.(type) {
 	case action.AliasSet:
-		stored, err := a.AliasSet(ctx, k.Name, k.Value)
+		stored, err := a.AliasSet(ctx, k.Name, k.Label)
 		if err != nil {
 			return err
 		}

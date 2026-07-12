@@ -38,9 +38,15 @@ func depsAt(root statedir.Root, selector Selector) Deps {
 // cfgOf は対話選択モードの action.Create をテスト用に解決する。
 func cfgOf(t *testing.T, name, reposDir, worktreesDir string) action.Create {
 	t.Helper()
-	cfg, err := action.NewCreate(name, nil, false, "", action.Overrides{
-		ReposDir: reposDir, WorktreesDir: worktreesDir, Remote: "origin",
-	}, &config.File{}, noEnv, os.UserHomeDir)
+	cfg, err := action.NewCreate(action.CreateInput{
+		Name: name,
+		Overrides: action.Overrides{
+			ReposDir: reposDir, WorktreesDir: worktreesDir, Remote: "origin",
+		},
+		File:   &config.File{},
+		Getenv: noEnv,
+		Home:   os.UserHomeDir,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

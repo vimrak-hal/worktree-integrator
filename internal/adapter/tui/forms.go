@@ -49,10 +49,10 @@ func (fc *formController) openCreate(res *app.ReposResult, innerW, formH int) te
 	return fc.form.Init()
 }
 
-// openAlias は別名フォームを開き、現在別名をプリフィルする（対象 worktree を固定して保持）。
-func (fc *formController) openAlias(wt, alias string, innerW, formH int) tea.Cmd {
+// openAlias は別名フォームを開き、現在のラベルをプリフィルする（対象 worktree を固定して保持）。
+func (fc *formController) openAlias(wt, label string, innerW, formH int) tea.Cmd {
 	fc.promptTarget = wt
-	fc.formAlias = alias
+	fc.formAlias = label
 	fc.form = newAliasForm(&fc.formAlias, innerW).WithHeight(formH)
 	fc.formKind = formAlias
 	return fc.form.Init()
@@ -151,12 +151,17 @@ func newCreateForm(repos []app.RepoInfo, name *string, sel *[]string, width int)
 	).WithShowHelp(false).WithWidth(width).WithTheme(formTheme())
 }
 
-// newAliasForm は別名入力の 1 枚フォームを組む純関数。現在別名を alias のポインタ
-// 経由でプリフィルし、空で確定すると削除・非空で設定になる（契約は aliasCmd 側）。
-func newAliasForm(alias *string, width int) *huh.Form {
+// newAliasForm はラベル入力の 1 枚フォームを組む純関数。現在のラベルを label の
+// ポインタ経由でプリフィルし、空で確定すると削除・非空で設定になる（設定と削除の
+// 呼び分けは appOps.Alias 側の契約）。空送信が削除になることは、huh の流儀に従い
+// 入力欄の Description で明示する。
+func newAliasForm(label *string, width int) *huh.Form {
 	return huh.NewForm(
 		huh.NewGroup(
-			huh.NewInput().Title("別名（空で削除）").Value(alias),
+			huh.NewInput().
+				Title("ラベル").
+				Description("空のまま確定するとラベルを削除します").
+				Value(label),
 		),
 	).WithShowHelp(false).WithWidth(width).WithTheme(formTheme())
 }
