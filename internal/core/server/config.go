@@ -13,7 +13,8 @@ package server
 import (
 	"errors"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/core/cmdspec"
@@ -45,12 +46,7 @@ func (s Config) IsEmpty() bool {
 
 // SortedRepoNames は、設定済みのリポジトリ名をソート済みの順序で返す。
 func (s Config) SortedRepoNames() []string {
-	names := make([]string, 0, len(s))
-	for name := range s {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
+	return slices.Sorted(maps.Keys(s))
 }
 
 // Validate は、TOML デコーダ自身がチェックしない必須フィールドを強制する: 全
@@ -76,12 +72,7 @@ type RepoServers map[string]Spec
 
 // SortedServerNames は、このリポジトリのサーバー名をソート済みの順序で返す。
 func (rs RepoServers) SortedServerNames() []string {
-	names := make([]string, 0, len(rs))
-	for name := range rs {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
+	return slices.Sorted(maps.Keys(rs))
 }
 
 // Spec は、1 つのサーバーの定義。

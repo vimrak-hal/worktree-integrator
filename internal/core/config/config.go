@@ -18,9 +18,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -89,19 +90,8 @@ func (f *File) ServersConfig() server.Config {
 	return out
 }
 
-// CopyPlanFor は repo の CopyPlan を、Defaults.Copy と Repos[repo].Copy をマージして
-// 解決する（MergeCopy を参照）。
-func (f *File) CopyPlanFor(repo string) CopyPlan {
-	return MergeCopy(f.Defaults.Copy, f.Repos[repo].Copy)
-}
-
 func sortedRepoNames(repos map[string]RepoConfig) []string {
-	names := make([]string, 0, len(repos))
-	for name := range repos {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
+	return slices.Sorted(maps.Keys(repos))
 }
 
 // Load は既定の設定ファイルパス（DefaultPath）から読み込む。ファイルが存在しない

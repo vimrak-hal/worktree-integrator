@@ -317,11 +317,17 @@ func addServer(root *cobra.Command, result *Invocation) {
 	// ディレクトリのフラグは server 系のすべての操作で共通。
 	addDirFlags(server.PersistentFlags())
 
-	// set は実行されたコマンドの共通フラグ（--repo とディレクトリ）を読み取り、
-	// kind と合わせて Server 起動要求として保存する。
-	set := func(c *cobra.Command, kind action.ServerKind) {
+	// build は実行されたコマンドの共通フラグ（--repo とディレクトリ）を読み取り、
+	// kind と合わせて Server 起動要求を組み立てる。status / logs は CLI 専用の表示
+	// フラグ（--json / -f）を足すため、ここで値を受け取って完成させてから一度だけ
+	// *result へ代入する（*result を読み戻して型アサーションで継ぎ足す形は避ける）。
+	build := func(c *cobra.Command, kind action.ServerKind) Server {
 		repos, _ := c.Flags().GetStringArray("repo")
-		*result = Server{Kind: kind, Repos: repos, Ov: dirOverrides(c)}
+		return Server{Kind: kind, Repos: repos, Ov: dirOverrides(c)}
+	}
+	// set は表示フラグを持たない操作（switch / stop）の保存を 1 行に畳む。
+	set := func(c *cobra.Command, kind action.ServerKind) {
+		*result = build(c, kind)
 	}
 
 	switchCmd := &cobra.Command{
@@ -350,11 +356,9 @@ func addServer(root *cobra.Command, result *Invocation) {
 		Short: "Show which worktree owns each repository's server",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
-			set(c, action.StatusKind{})
-			if srv, ok := (*result).(Server); ok {
-				srv.Json, _ = c.Flags().GetBool("json")
-				*result = srv
-			}
+			srv := build(c, action.StatusKind{})
+			srv.Json, _ = c.Flags().GetBool("json")
+			*result = srv
 			return nil
 		},
 	}
@@ -387,12 +391,10 @@ func addServer(root *cobra.Command, result *Invocation) {
 			}
 			lines, _ := c.Flags().GetInt("lines")
 			prev, _ := c.Flags().GetBool("prev")
-			set(c, action.LogsKind{Scope: scope, Lines: lines, Prev: prev})
+			srv := build(c, action.LogsKind{Scope: scope, Lines: lines, Prev: prev})
 			// -f は action の語彙ではなく CLI の表示手段（Server 起動要求のフラグ）。
-			if srv, ok := (*result).(Server); ok {
-				srv.FollowLogs, _ = c.Flags().GetBool("follow")
-				*result = srv
-			}
+			srv.FollowLogs, _ = c.Flags().GetBool("follow")
+			*result = srv
 			return nil
 		},
 	}

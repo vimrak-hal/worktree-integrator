@@ -27,16 +27,20 @@ type Repo struct {
 // ファイル（既にリンクされたワークツリー）の場合もある。結果は名前順にソートされる。
 // ネットワークファイルシステム上の巨大なディレクトリでも走査を打ち切れるよう、
 // ctx のキャンセルに応答する。
+//
+// 失敗（探索対象ディレクトリの読み取り不能・走査中のキャンセル）は探索の文脈と
+// baseDir を添えて返すため、呼び出し側（app/create・app/tree・app）はそのまま返せば
+// よく、逐語の整形を各所で複製しなくてよい。
 func Discover(ctx context.Context, baseDir string) ([]Repo, error) {
 	entries, err := os.ReadDir(baseDir)
 	if err != nil {
-		return nil, fmt.Errorf("read directory %s: %w", baseDir, err)
+		return nil, discoverError(baseDir, err)
 	}
 
 	var repos []Repo
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, discoverError(baseDir, err)
 		}
 		if !entry.IsDir() {
 			continue
@@ -59,6 +63,14 @@ func Discover(ctx context.Context, baseDir string) ([]Repo, error) {
 		}
 	})
 	return repos, nil
+}
+
+// discoverError は Discover の失敗を、探索の文脈と baseDir を添えて包む。呼び出し側
+// 3 箇所（app/create・app/tree・app）で逐語複製されていた整形をここへ集約する。
+// %w で元エラーを保つため、キャンセル由来（context.Canceled）の errors.Is 判別は
+// 呼び出し側でそのまま効く。
+func discoverError(baseDir string, err error) error {
+	return fmt.Errorf("リポジトリの探索に失敗しました（%s）: %w", baseDir, err)
 }
 
 // RetainNamed は、名前が names に含まれるリポジトリを保持し、検出（ソート済み）順を

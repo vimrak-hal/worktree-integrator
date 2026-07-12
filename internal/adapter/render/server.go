@@ -15,9 +15,7 @@ const aliasColumnLimit = 25
 // warnings は各 Result 共通の警告（旧形式ファイルの退避・未知のリポジトリ名）を
 // 書き出す。
 func warnings(w io.Writer, legacyBackup string, unknownRepos []string) {
-	if legacyBackup != "" {
-		fmt.Fprintf(w, "旧形式の状態ファイルを %s へ退避しました。以前から稼働中のサーバーは追跡されていません。手動で停止してください。\n", legacyBackup)
-	}
+	legacyBackupLine(w, legacyBackup)
 	for _, repo := range unknownRepos {
 		tagged(w, repo, "サーバー設定がありません（[servers.%s]）", repo)
 	}

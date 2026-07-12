@@ -411,7 +411,7 @@ gitignored = true
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan := f.CopyPlanFor("api")
+	plan := MergeCopy(f.Defaults.Copy, f.Repos["api"].Copy)
 	for _, want := range []string{"node_modules", ".venv", "venv", "target", ".direnv", ".cache", ".DS_Store"} {
 		found := false
 		for _, ex := range plan.Exclude {
@@ -436,7 +436,7 @@ exclude          = ["custom"]
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan := f.CopyPlanFor("api")
+	plan := MergeCopy(f.Defaults.Copy, f.Repos["api"].Copy)
 	if len(plan.Exclude) != 1 || plan.Exclude[0] != "custom" {
 		t.Fatalf("exclude_defaults=false should opt out of built-ins entirely: %v", plan.Exclude)
 	}
@@ -457,7 +457,7 @@ exclude    = ["tmp/cache"]
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan := f.CopyPlanFor("api")
+	plan := MergeCopy(f.Defaults.Copy, f.Repos["api"].Copy)
 	if len(plan.Paths) != 2 || plan.Paths[0] != ".env" || plan.Paths[1] != "backend/.env" {
 		t.Fatalf("paths = %v", plan.Paths)
 	}
@@ -474,7 +474,7 @@ exclude    = ["tmp/cache"]
 		t.Fatalf("exclude should contain the repo-specific pattern: %v", plan.Exclude)
 	}
 	// リポジトリ設定の無いリポジトリは defaults.copy のみを継承する。
-	other := f.CopyPlanFor("other")
+	other := MergeCopy(f.Defaults.Copy, f.Repos["other"].Copy)
 	if len(other.Paths) != 1 || other.Paths[0] != ".env" || other.Gitignored {
 		t.Fatalf("other = %+v", other)
 	}

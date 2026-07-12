@@ -13,9 +13,7 @@ import (
 // 壊れたチェックアウトを含む worktree は "(!)" マークが付き、末尾に doctor の
 // 案内を添える。
 func List(w io.Writer, res *tree.ListResult) {
-	if res.LegacyBackup != "" {
-		fmt.Fprintf(w, "旧形式の状態ファイルを %s へ退避しました。以前から稼働中のサーバーは追跡されていません。手動で停止してください。\n", res.LegacyBackup)
-	}
+	legacyBackupLine(w, res.LegacyBackup)
 	if len(res.Worktrees) == 0 {
 		fmt.Fprintf(w, "worktree はありません（%s）\n", res.WorktreesDir)
 		return
@@ -83,9 +81,7 @@ func Enter(w io.Writer, res *tree.EnterResult) {
 // Remove は `remove` の結果を描画する。サーバー停止のライブイベント行（Progress）は
 // 描画済みという前提で、各ステップの結末を書き出す。
 func Remove(w io.Writer, res *tree.RemoveResult) {
-	if res.LegacyBackup != "" {
-		fmt.Fprintf(w, "旧形式の状態ファイルを %s へ退避しました。以前から稼働中のサーバーは追跡されていません。手動で停止してください。\n", res.LegacyBackup)
-	}
+	legacyBackupLine(w, res.LegacyBackup)
 	if res.Stop != nil && res.Stop.Failed > 0 {
 		fmt.Fprintf(w, "サーバー停止に失敗したため削除を中断しました（%d 件）\n", res.Stop.Failed)
 		return
@@ -136,9 +132,7 @@ func Remove(w io.Writer, res *tree.RemoveResult) {
 
 // Doctor は `doctor` の発見一覧と修復サマリを描画する。
 func Doctor(w io.Writer, res *tree.DoctorResult) {
-	if res.LegacyBackup != "" {
-		fmt.Fprintf(w, "旧形式の状態ファイルを %s へ退避しました。以前から稼働中のサーバーは追跡されていません。手動で停止してください。\n", res.LegacyBackup)
-	}
+	legacyBackupLine(w, res.LegacyBackup)
 	if len(res.Findings) == 0 {
 		fmt.Fprintln(w, "問題は見つかりませんでした")
 		return

@@ -60,7 +60,7 @@ type Finding struct {
 func Doctor(ctx context.Context, d Deps, fix bool) (*DoctorResult, error) {
 	repos, err := repo.Discover(ctx, d.ReposDir)
 	if err != nil {
-		return nil, fmt.Errorf("リポジトリの探索に失敗しました（%s）: %w", d.ReposDir, err)
+		return nil, err
 	}
 	env := &checkEnv{deps: d, repos: repos}
 

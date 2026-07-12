@@ -9,9 +9,9 @@ package app
 
 import (
 	"context"
-	"fmt"
+	"maps"
 	"os"
-	"sort"
+	"slices"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/app/action"
 	"github.com/vimrak-hal/worktree-integrator/internal/app/create"
@@ -262,12 +262,7 @@ type AliasesResult struct {
 // SortedNames は別名が付いた worktree 名をソート済みで返す（表示層の決定的な
 // 描画順のため）。
 func (r *AliasesResult) SortedNames() []string {
-	names := make([]string, 0, len(r.Aliases))
-	for name := range r.Aliases {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
+	return slices.Sorted(maps.Keys(r.Aliases))
 }
 
 // AliasList はすべての表示用別名を返す。
@@ -312,7 +307,7 @@ func (a *App) ListRepos(ctx context.Context) (*ReposResult, error) {
 	}
 	repos, err := repo.Discover(ctx, dir)
 	if err != nil {
-		return nil, fmt.Errorf("リポジトリの探索に失敗しました（%s）: %w", dir, err)
+		return nil, err
 	}
 	res := &ReposResult{ReposDir: dir, Repos: []RepoInfo{}}
 	for _, r := range repos {

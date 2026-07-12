@@ -67,3 +67,12 @@ func dash(s string) string {
 func tagged(w io.Writer, tag, format string, args ...any) {
 	fmt.Fprintf(w, "  [%s] %s\n", tag, fmt.Sprintf(format, args...))
 }
+
+// legacyBackupLine は旧形式の状態ファイルが退避されていれば、その旨の警告を 1 行
+// 書き出す（退避が無ければ何もしない）。server / tree の各描画が個別に持っていた同一
+// 文言をここへ集約する。
+func legacyBackupLine(w io.Writer, legacyBackup string) {
+	if legacyBackup != "" {
+		fmt.Fprintf(w, "旧形式の状態ファイルを %s へ退避しました。以前から稼働中のサーバーは追跡されていません。手動で停止してください。\n", legacyBackup)
+	}
+}

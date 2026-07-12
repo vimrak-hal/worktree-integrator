@@ -106,10 +106,11 @@ func Run(ctx context.Context, deps Deps, cfg action.Create) (*Result, error) {
 		return res, errors.New("before フックが失敗したため中断します")
 	}
 
-	// 候補リポジトリを探索し、モードに従って操作対象を決める。
+	// 候補リポジトリを探索し、モードに従って操作対象を決める（探索失敗は Discover が
+	// 文脈付きで返す）。
 	repos, err := repo.Discover(ctx, cfg.ReposDir)
 	if err != nil {
-		return res, fmt.Errorf("リポジトリの探索に失敗しました（%s）: %w", cfg.ReposDir, err)
+		return res, err
 	}
 	res.Discovered = len(repos)
 
