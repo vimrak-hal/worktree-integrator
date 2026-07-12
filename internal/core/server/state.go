@@ -219,7 +219,7 @@ func (s *StateStore) migrateLegacy(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 	if legacy, err := s.isLegacyFile(); err != nil || !legacy {
 		return err
 	}

@@ -94,7 +94,7 @@ func (r Root) WithRepoLock(ctx context.Context, repo string, fn func() error) er
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	defer func() { _ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN) }()
 
 	return fn()

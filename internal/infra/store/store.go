@@ -248,7 +248,7 @@ func (f *File[T]) Update(ctx context.Context, mutate func(doc *T) (dirty bool, e
 	if err != nil {
 		return err
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 	doc, err := session.Load()
 	if err != nil {
 		return err
@@ -272,7 +272,7 @@ func (f *File[T]) View(ctx context.Context, view func(doc *T) error) error {
 	if err != nil {
 		return err
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 	doc, err := session.Load()
 	if err != nil {
 		return err

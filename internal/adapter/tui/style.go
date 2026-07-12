@@ -23,7 +23,6 @@ const (
 // 使わず、前景色・faint・bold だけで強調を表現する。
 var (
 	styFlag    = lipgloss.NewStyle().Foreground(colorAccent)
-	styHelp    = lipgloss.NewStyle().Faint(true)
 	styNote    = lipgloss.NewStyle().Foreground(colorWarn)
 	styErrNote = lipgloss.NewStyle().Foreground(colorError)
 

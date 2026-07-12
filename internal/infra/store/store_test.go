@@ -34,7 +34,7 @@ func loadVia(t *testing.T, s *File[doc]) *doc {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 	d, err := session.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +49,7 @@ func saveVia(t *testing.T, s *File[doc], d *doc) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 	if err := session.Save(d); err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestLoadRejectsUnknownKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 	if _, err := session.Load(); err == nil {
 		t.Fatal("expected error for unknown key")
 	}
@@ -136,7 +136,7 @@ func TestLoadRejectsNewerVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 	if _, err := session.Load(); err == nil {
 		t.Fatal("expected error for a newer document version")
 	}
@@ -149,12 +149,12 @@ func TestLockReentrantAfterClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s1.Close()
+	_ = s1.Close()
 	s2, err := s.Exclusive(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	s2.Close()
+	_ = s2.Close()
 }
 
 // 共有（読み取り専用）セッションでの Save は ErrReadOnly で拒否される。
@@ -164,7 +164,7 @@ func TestSharedSessionSaveIsReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	err = session.Save(&doc{Version: docVersion})
 	if !errors.Is(err, ErrReadOnly) {
@@ -182,12 +182,12 @@ func TestSharedSessionsCoexist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s1.Close()
+	defer func() { _ = s1.Close() }()
 	s2, err := s.Shared(t.Context())
 	if err != nil {
 		t.Fatalf("second shared session should coexist: %v", err)
 	}
-	s2.Close()
+	_ = s2.Close()
 }
 
 // 排他ロックの競合は、タイムアウト（テストでは短縮）後に ErrBusy として報告される。
@@ -199,7 +199,7 @@ func TestExclusiveContentionTimesOutWithErrBusy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer holder.Close()
+	defer func() { _ = holder.Close() }()
 
 	// flock はファイルディスクリプタ単位なので、同一プロセス内でも別のセッションは
 	// 競合する。
@@ -221,7 +221,7 @@ func TestExclusiveContentionHonorsContextCancel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer holder.Close()
+	defer func() { _ = holder.Close() }()
 
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()

@@ -314,18 +314,6 @@ func aggColored(n node) string {
 	return strings.Join(parts, " ")
 }
 
-// markGlyph は無色のマーク記号（選択行用）。
-func markGlyph(n node) string {
-	switch {
-	case n.running:
-		return "●"
-	case n.crashed:
-		return "✗"
-	default:
-		return "○"
-	}
-}
-
 // markColored は色付きのマーク記号（非選択行用）。
 func markColored(n node) string {
 	switch {

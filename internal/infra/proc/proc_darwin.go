@@ -3,7 +3,9 @@
 package proc
 
 import (
+	"errors"
 	"fmt"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -25,4 +27,12 @@ func StartTime(pid int) (time.Time, error) {
 	}
 	tv := kp.Proc.P_starttime
 	return time.Unix(tv.Sec, int64(tv.Usec)*int64(time.Microsecond)), nil
+}
+
+// processExists は pid のプロセスが存在するかを kill(pid, 0) で確認する。EPERM は
+// 「存在するが所有者が異なる」ことを意味するため、存在とみなす。StartTime の実在確認
+// でのみ使うため、darwin ビルドに閉じて置く。
+func processExists(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }

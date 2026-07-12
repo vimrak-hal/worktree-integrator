@@ -100,7 +100,7 @@ func (u *UnixProcess) SpawnDetached(script, cwd string, env []string, logPath st
 	if err != nil {
 		return proc.Ident{}, fmt.Errorf("open log file %s: %w", logPath, err)
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 
 	cmd := exec.Command("sh", "-c", script)
 	cmd.Dir = cwd

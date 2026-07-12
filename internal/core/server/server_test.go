@@ -31,7 +31,7 @@ func saveState(t *testing.T, store *server.StateStore, state *server.State) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 	if err := session.Save(state); err != nil {
 		t.Fatal(err)
 	}

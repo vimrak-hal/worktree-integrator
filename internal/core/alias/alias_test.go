@@ -75,7 +75,7 @@ func TestRemoveReportsPresence(t *testing.T) {
 	if existed, _ := s.Remove(t.Context(), "feat-a"); existed {
 		t.Fatal("remove absent should be false")
 	}
-	s.Set(t.Context(), "feat-a", "x")
+	_, _ = s.Set(t.Context(), "feat-a", "x")
 	if existed, _ := s.Remove(t.Context(), "feat-a"); !existed {
 		t.Fatal("remove present should be true")
 	}
@@ -83,7 +83,7 @@ func TestRemoveReportsPresence(t *testing.T) {
 
 func TestSetIsAtomicNoLeftoverTempFile(t *testing.T) {
 	s := newTestStore(t)
-	s.Set(t.Context(), "feat-a", "x")
+	_, _ = s.Set(t.Context(), "feat-a", "x")
 	if _, err := os.Stat(s.File()); err != nil {
 		t.Fatal("aliases file missing")
 	}
@@ -94,8 +94,8 @@ func TestSetIsAtomicNoLeftoverTempFile(t *testing.T) {
 
 func TestRoundTripsMultipleEntriesSorted(t *testing.T) {
 	s := newTestStore(t)
-	s.Set(t.Context(), "feat-b", "B")
-	s.Set(t.Context(), "feat-a", "A")
+	_, _ = s.Set(t.Context(), "feat-b", "B")
+	_, _ = s.Set(t.Context(), "feat-a", "A")
 	a, _ := s.Load(t.Context())
 	keys := make([]string, 0, len(a.Aliases))
 	for k := range a.Aliases {
@@ -109,8 +109,8 @@ func TestRoundTripsMultipleEntriesSorted(t *testing.T) {
 
 func TestRepeatedSetKeepsLatest(t *testing.T) {
 	s := newTestStore(t)
-	s.Set(t.Context(), "feat-a", "x")
-	s.Set(t.Context(), "feat-a", "y")
+	_, _ = s.Set(t.Context(), "feat-a", "x")
+	_, _ = s.Set(t.Context(), "feat-a", "y")
 	if v, _, _ := s.Get(t.Context(), "feat-a"); v != "y" {
 		t.Fatalf("get = %q", v)
 	}
@@ -119,7 +119,7 @@ func TestRepeatedSetKeepsLatest(t *testing.T) {
 func TestRoundTripUnmarshalFromDisk(t *testing.T) {
 	root := statedir.At(t.TempDir())
 	s := NewStore(root)
-	s.Set(t.Context(), "feat-a", "A")
+	_, _ = s.Set(t.Context(), "feat-a", "A")
 	// 新しいストアから読み戻すことで、ディスク上の形式がラウンドトリップすることを確かめる。
 	again := NewStore(root)
 	got, _ := again.Load(t.Context())

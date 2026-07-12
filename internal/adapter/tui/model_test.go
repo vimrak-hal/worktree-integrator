@@ -292,8 +292,8 @@ func TestApplyResolvedResetsOnPathChange(t *testing.T) {
 	dir := t.TempDir()
 	oldLog := filepath.Join(dir, "feat-a.log")
 	newLog := filepath.Join(dir, "feat-b.log")
-	os.WriteFile(oldLog, []byte("old line\n"), 0o644)
-	os.WriteFile(newLog, []byte("new line\n"), 0o644)
+	_ = os.WriteFile(oldLog, []byte("old line\n"), 0o644)
+	_ = os.WriteFile(newLog, []byte("new line\n"), 0o644)
 
 	k := "feat-a\x00api/backend"
 	m.curKey = k
@@ -315,7 +315,7 @@ func TestFilterNarrowsRenderedLines(t *testing.T) {
 	k := "feat-a\x00api/backend"
 	m.curKey = k
 	log := filepath.Join(t.TempDir(), "a.log")
-	os.WriteFile(log, []byte("GET /healthz 200\nERROR boom\nGET /users 200\n"), 0o644)
+	_ = os.WriteFile(log, []byte("GET /healthz 200\nERROR boom\nGET /users 200\n"), 0o644)
 	m.applyResolved(resolvedMsg{selKey: k, path: log, status: &server.StatusResult{}})
 
 	m.filter = "error"
@@ -655,7 +655,7 @@ func TestNewGuardedWhileOpRunning(t *testing.T) {
 func TestApplyResolvedIgnoresStaleSeq(t *testing.T) {
 	m := newTestModel(t)
 	log := filepath.Join(t.TempDir(), "a.log")
-	os.WriteFile(log, []byte("live line\n"), 0o644)
+	_ = os.WriteFile(log, []byte("live line\n"), 0o644)
 	k := "feat-a\x00api/backend"
 	m.curKey = k
 
@@ -707,7 +707,7 @@ func TestWindowResizePreservesYOffset(t *testing.T) {
 	for i := 0; i < 200; i++ {
 		b.WriteString("line\n")
 	}
-	os.WriteFile(log, []byte(b.String()), 0o644)
+	_ = os.WriteFile(log, []byte(b.String()), 0o644)
 	m.applyResolved(resolvedMsg{selKey: k, path: log, status: &server.StatusResult{}})
 
 	m.follow = false

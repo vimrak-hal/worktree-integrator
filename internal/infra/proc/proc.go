@@ -15,7 +15,6 @@ import (
 	"context"
 	"errors"
 	"os/exec"
-	"syscall"
 	"time"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/childio"
@@ -68,13 +67,6 @@ func SameStart(st time.Time, recordedUnixMs int64) bool {
 		diff = -diff
 	}
 	return diff <= startTolerance
-}
-
-// processExists は pid のプロセスが存在するかを kill(pid, 0) で確認する。EPERM は
-// 「存在するが所有者が異なる」ことを意味するため、存在とみなす。
-func processExists(pid int) bool {
-	err := syscall.Kill(pid, 0)
-	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // waitDelay は、コマンドの終了（またはキャンセルによる kill）後も子孫プロセスが

@@ -41,10 +41,7 @@ func TestGroupReapedTrueForZombie(t *testing.T) {
 
 	// ゾンビ状態へ遷移し、GroupReaped が消滅を報告するまで待つ。
 	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if proc.GroupReaped(pgid) {
-			break
-		}
+	for !proc.GroupReaped(pgid) {
 		if time.Now().After(deadline) {
 			t.Fatal("group of a SIGKILLed-but-unreaped member should be reported as reaped")
 		}

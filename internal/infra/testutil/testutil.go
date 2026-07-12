@@ -52,7 +52,7 @@ func CloneWithBranchNamed(t *testing.T, parent, branch, name string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(work)
+	defer func() { _ = os.RemoveAll(work) }()
 
 	git(t, "", "init", "-b", branch, work)
 	if err := os.WriteFile(filepath.Join(work, "README.md"), []byte("hello\n"), 0o644); err != nil {
