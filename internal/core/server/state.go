@@ -145,14 +145,14 @@ type StateStore struct {
 	// パスとともに呼ばれる。表示層が警告（「稼働中のサーバーは手動で停止してください」）
 	// を出すための通知であり、nil なら何もしない。
 	OnLegacy func(bakPath string)
-	// migrateOnce / migrateErr は、レガシー移行の検査をこのストアインスタンスあたり
-	// 高々一度に絞る。移行はディスク上のファイルを一度退避すれば意味を持ち終えるため、
-	// Exclusive / Update / View が毎回検査を繰り返す必要はない。最初の検査の結果
-	//（成功なら nil）を保持し、以降の全経路で再利用する。ストアはワークフロー単位で
-	// 生成される（app 層が呼び出しごとに NewStateStore する）ため、保持したエラーが
-	// 別コマンドへ波及することはない。
-	migrateOnce sync.Once
-	migrateErr  error
+	// migrateMu / migrateDone は、レガシー移行の検査をこのストアインスタンスあたり
+	// 高々一度の「成功」に絞る。移行はディスク上のファイルを一度退避すれば意味を持ち
+	// 終えるため、成功後は Exclusive / Update / View が検査を繰り返す必要はない。ただし
+	// 一時的な失敗（ErrBusy などのロック競合）まで恒久キャッシュすると、以降の全操作が
+	// 同じエラーを返し続けてしまうため、キャッシュするのは成功時のみとし、失敗時は次回
+	// 呼び出しで再試行する。migrateMu が検査の直列化と migrateDone の並行安全を担う。
+	migrateMu   sync.Mutex
+	migrateDone bool
 }
 
 // NewStateStore は root を状態ルートとする状態ストアを返す。呼び出し側（app 層）が
@@ -178,14 +178,23 @@ type legacyProbe struct {
 	Version uint32 `toml:"version"`
 }
 
-// ensureMigrated はレガシー移行の検査を、このストアインスタンスあたり高々一度だけ
-// 実行する。最初の呼び出しの結果（成功なら nil、失敗ならそのエラー）を保持し、
-// 以降の Exclusive / Update / View はロックも読み取りも取らずにそれを再利用する。
+// ensureMigrated はレガシー移行の検査を、このストアインスタンスあたり高々一度の
+// 成功に絞って実行する。成功（nil）を一度観測したらそれをキャッシュし、以降の
+// Exclusive / Update / View はロックも読み取りも取らずに素通りする。失敗（ErrBusy
+// などの一時的なロック競合を含む）はキャッシュせず、次回呼び出しで再試行する
+// （さもないと一過性の失敗が以降の全操作へ恒久的に波及してしまう）。migrateMu が
+// 検査の直列化を担うため、並行呼び出しがあっても移行は高々一度しか走らない。
 func (s *StateStore) ensureMigrated(ctx context.Context) error {
-	s.migrateOnce.Do(func() {
-		s.migrateErr = s.migrateLegacy(ctx)
-	})
-	return s.migrateErr
+	s.migrateMu.Lock()
+	defer s.migrateMu.Unlock()
+	if s.migrateDone {
+		return nil
+	}
+	if err := s.migrateLegacy(ctx); err != nil {
+		return err
+	}
+	s.migrateDone = true
+	return nil
 }
 
 // migrateLegacy は状態ファイルが旧形式（version が StateVersion 未満）であれば

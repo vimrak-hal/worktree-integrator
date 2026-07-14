@@ -47,27 +47,27 @@ func (c *Commands) UnmarshalTOML(v any) error {
 	switch t := v.(type) {
 	case string:
 		if t == "" {
-			return fmt.Errorf("command must not be an empty string")
+			return fmt.Errorf("`command` に空文字列は指定できません")
 		}
 		c.lines = []string{t}
 	case []any:
 		if len(t) == 0 {
-			return fmt.Errorf("command array must not be empty")
+			return fmt.Errorf("`command` の配列を空にすることはできません")
 		}
 		lines := make([]string, 0, len(t))
 		for _, e := range t {
 			s, ok := e.(string)
 			if !ok {
-				return fmt.Errorf("command array must contain only strings, got %T", e)
+				return fmt.Errorf("`command` の配列は文字列のみを含む必要があります（%T が指定されました）", e)
 			}
 			if s == "" {
-				return fmt.Errorf("command array must not contain empty strings")
+				return fmt.Errorf("`command` の配列に空文字列を含めることはできません")
 			}
 			lines = append(lines, s)
 		}
 		c.lines = lines
 	default:
-		return fmt.Errorf("command must be a string or an array of strings, got %T", v)
+		return fmt.Errorf("`command` は文字列または文字列の配列である必要があります（%T が指定されました）", v)
 	}
 	return nil
 }

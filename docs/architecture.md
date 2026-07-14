@@ -52,7 +52,7 @@ internal/
       repo/       repos_dir 配下の Git リポジトリ検出
       worktree/   1 リポジトリ分の処理（fetch → worktree 作成）と並列実行・進捗
     hooks/      フック定義・結果型と、タイミング単位の並列実行。結果の表示語彙（Report）も所有し、render / --json / MCP がこれを共有する
-    inventory/  worktrees_dir の実体スキャン（list / doctor / create / remove が共有）
+    inventory/  worktrees_dir の実体スキャン（list / remove が共有。doctor / create は別方式）
     server/     サーバー設定スキーマ・プロセス制御インターフェースと状態機械・切替 / 停止 / 状態ロジック
       serverfake/ プロセスに触れない ProcessControl のインメモリダブル（テスト専用）
     wtenv/      run / repo コンテキストと WT_* 環境変数のドメイン語彙（唯一の定義）

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"unicode"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/statedir"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/store"
@@ -87,6 +88,10 @@ func (s *Store) Get(ctx context.Context, worktree string) (string, bool, error) 
 // 扱っていたが、「設定」と「削除」が同じ操作に同居する暗黙の分岐を仕様ごと
 // 刈り込んだ）。
 //
+// 正規化後に制御文字（ESC / CSI などのエスケープシーケンス・行中の \r・\t 等）を
+// 含むラベルも拒否する。ラベルは render / TUI がそのまま端末へ描画するため、生の
+// 制御文字を保存すると（例: MCP 経由で）端末エスケープを注入されうる。
+//
 // この「空ラベル = エラー」はストアの契約であり、TUI の別名フォームで空のまま
 // 送信したときに削除する挙動は、フロントエンド（adapter/tui）が空入力を検出して
 // Set ではなく Remove を呼び分けることで実現している（このメソッド自体は空ラベルを
@@ -95,6 +100,9 @@ func (s *Store) Set(ctx context.Context, worktree, label string) (stored string,
 	normalized := firstLineTrimmed(label)
 	if normalized == "" {
 		return "", errors.New("空のラベルは設定できません。削除は alias rm を使ってください")
+	}
+	if strings.IndexFunc(normalized, unicode.IsControl) >= 0 {
+		return "", errors.New("ラベルに制御文字を含めることはできません")
 	}
 	err = s.inner.Update(ctx, func(a *Aliases) (bool, error) {
 		if a.Aliases == nil {

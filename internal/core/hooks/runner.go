@@ -103,15 +103,15 @@ func execute(ctx context.Context, hook *Hook, run *wtenv.RunContext, repo *wtenv
 			fmt.Sprintf("タイムアウト（%d 秒）のため強制終了しました", hook.TimeoutSecs), hook.AllowFailure)
 	case proc.ResultCanceled:
 		// 何が起きたかが分かるよう、ctx 起因の失敗はキャンセルとして明示する。
-		return failed(hook.Name, "canceled: "+ctx.Err().Error(), hook.AllowFailure)
+		return failed(hook.Name, "キャンセルされました: "+ctx.Err().Error(), hook.AllowFailure)
 	case proc.ResultExitNonZero:
 		// 終了状況（"exit status N" / "signal: ..."）をそのまま見せるため、元の
 		// *exec.ExitError を取り出して整形する。
 		var exit *exec.ExitError
 		_ = errors.As(err, &exit)
-		return failed(hook.Name, fmt.Sprintf("exited unsuccessfully (%s)", exit), hook.AllowFailure)
+		return failed(hook.Name, fmt.Sprintf("異常終了しました（%s）", exit), hook.AllowFailure)
 	default: // ResultStartFailed
-		return failed(hook.Name, "failed to run: "+err.Error(), hook.AllowFailure)
+		return failed(hook.Name, "起動に失敗しました: "+err.Error(), hook.AllowFailure)
 	}
 }
 

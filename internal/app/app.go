@@ -58,6 +58,13 @@ type App struct {
 	Selector create.Selector
 	// Progress は進捗通知先。nil = 無通知。
 	Progress Progress
+	// Getenv は環境変数の参照（既定は os.Getenv）。ディレクトリ解決（ReposDir /
+	// WorktreesDir）へ注入され、テストで環境を差し替え可能にする。action の解決関数が
+	// 環境の直読みではなく注入された関数を取る契約に、app 層も揃える。
+	Getenv func(string) string
+	// Home はホームディレクトリの解決（既定は os.UserHomeDir）。既定ディレクトリの
+	// 解決に使われ、Getenv と同じく注入で差し替え可能にする。
+	Home func() (string, error)
 }
 
 // New は全ワークフロー共通の依存束を構築する。ChildIO と Proc は必ず同じ streams から
@@ -72,6 +79,8 @@ func New(cfg *config.File, root statedir.Root, streams childio.Streams, opts ...
 		Root:    root,
 		ChildIO: streams,
 		Proc:    procctl.NewUnixProcess(streams),
+		Getenv:  os.Getenv,
+		Home:    os.UserHomeDir,
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -127,11 +136,11 @@ func (a *App) Create(ctx context.Context, act action.Create) (*create.Result, er
 // WT_* 環境変数）はここで行う。server ワークフロー共通の依存（状態ストアと退避先の
 // 捕捉を含む）は serverDeps を土台に使い、tree 固有の依存だけを重ねる。
 func (a *App) treeDeps() (tree.Deps, func() string, error) {
-	reposDir, err := action.ReposDir("", a.Config, os.Getenv, os.UserHomeDir)
+	reposDir, err := action.ReposDir("", a.Config, a.Getenv, a.Home)
 	if err != nil {
 		return tree.Deps{}, nil, err
 	}
-	worktreesDir, err := action.WorktreesDir("", a.Config, os.Getenv, os.UserHomeDir)
+	worktreesDir, err := action.WorktreesDir("", a.Config, a.Getenv, a.Home)
 	if err != nil {
 		return tree.Deps{}, nil, err
 	}
@@ -299,9 +308,10 @@ type RepoInfo struct {
 
 // ListRepos は repos_dir 直下の Git リポジトリの一覧を返す。repos_dir は設定と
 // 環境変数（WT_REPOS_DIR）から解決する（このメソッドは解決済みアクションを取らない
-// ため、環境変数の参照だけはここで行う）。
+// ため、環境変数の参照だけはここで行う）。環境の参照は注入された a.Getenv 経由で
+// 行うため、テストは a.Getenv を差し替えるだけで済む。
 func (a *App) ListRepos(ctx context.Context) (*ReposResult, error) {
-	dir, err := action.ReposDir("", a.Config, os.Getenv, os.UserHomeDir)
+	dir, err := action.ReposDir("", a.Config, a.Getenv, a.Home)
 	if err != nil {
 		return nil, err
 	}

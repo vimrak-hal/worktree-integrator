@@ -259,7 +259,7 @@ func TestHookIsInterruptedByCancel(t *testing.T) {
 	if out[0].Status != StatusFailed {
 		t.Fatalf("outcome = %+v, want StatusFailed", out[0])
 	}
-	if !strings.Contains(out[0].Detail, "canceled") {
+	if !strings.Contains(out[0].Detail, "キャンセル") {
 		t.Fatalf("detail = %q, want it to mention the cancellation", out[0].Detail)
 	}
 }

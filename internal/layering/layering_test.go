@@ -94,6 +94,15 @@ func TestLayerDependenciesAreOneDirectional(t *testing.T) {
 			importedRel := strings.TrimPrefix(imp, internalPrefix)
 			importedRank, importedLayered := layerOf(importedRel)
 
+			// buildinfo 自身は internal を一切 import しない不変条件（package doc の
+			// 主張）を検査する。buildinfo はどの層からも import される単一情報源であり、
+			// 逆に internal の何かに依存すると層の外から依存関係を持ち込みうる。この
+			// 検査は被 import 側が層に属するか否かに関わらず行う（層に属さない
+			// internal パッケージへの import も禁じる）。
+			if relDir == "buildinfo" || strings.HasPrefix(relDir, "buildinfo/") {
+				t.Errorf("レイヤ違反: buildinfo が internal パッケージ %s を import している", importedRel)
+				continue
+			}
 			// 層に属さない被 import パッケージ（buildinfo）は、どの層からでも
 			// import してよい。
 			if !importedLayered {

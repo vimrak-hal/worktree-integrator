@@ -70,6 +70,34 @@ func TestSetBlankIsErrorAndKeepsExisting(t *testing.T) {
 	}
 }
 
+// 制御文字（ESC などのエスケープシーケンス・行中の \t 等）を含むラベルは拒否され、
+// 既存の別名を消さない。ラベルは render / TUI がそのまま端末へ描画するため、生の
+// 制御文字を保存させないことで端末エスケープ注入を防ぐ。通常のラベルは従来どおり
+// 設定できる。
+func TestSetRejectsControlChars(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.Set(t.Context(), "feat-a", "既存"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Set(t.Context(), "feat-a", "ABC-123: \x1b[31mred\x1b[0m"); err == nil {
+		t.Fatal("ESC を含むラベルはエラーになるべき")
+	}
+	if _, err := s.Set(t.Context(), "feat-a", "col1\tcol2"); err == nil {
+		t.Fatal("行中のタブを含むラベルはエラーになるべき")
+	}
+	// 拒否されても既存の別名は保持される。
+	if v, ok, _ := s.Get(t.Context(), "feat-a"); !ok || v != "既存" {
+		t.Fatalf("既存の別名は保持されるべき: %q %v", v, ok)
+	}
+
+	// 制御文字を含まない通常のラベルは従来どおり設定できる。
+	stored, err := s.Set(t.Context(), "feat-a", "ABC-123: Fix login")
+	if err != nil || stored != "ABC-123: Fix login" {
+		t.Fatalf("通常ラベルは設定できるべき: %q %v", stored, err)
+	}
+}
+
 func TestRemoveReportsPresence(t *testing.T) {
 	s := newTestStore(t)
 	if existed, _ := s.Remove(t.Context(), "feat-a"); existed {

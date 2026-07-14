@@ -84,6 +84,34 @@ func TestListReposReturnsTypedResult(t *testing.T) {
 	}
 }
 
+// ディレクトリ解決の環境参照は注入された App.Getenv / App.Home 経由で行われるため、
+// プロセス環境（t.Setenv）に触れずに差し替えられる。ここでは Getenv を差し替えて
+// repos_dir を注入し、ListRepos がそれを使うことを確かめる。
+func TestReposDirResolutionUsesInjectedGetenv(t *testing.T) {
+	reposDir := t.TempDir()
+	testutil.CloneWithBranchNamed(t, reposDir, "main", "repo-a")
+
+	a := newApp(t)
+	// プロセス環境ではなく注入された Getenv から WT_REPOS_DIR を解決させる。
+	a.Getenv = func(key string) string {
+		if key == "WT_REPOS_DIR" {
+			return reposDir
+		}
+		return ""
+	}
+
+	res, err := a.ListRepos(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ReposDir != reposDir {
+		t.Fatalf("ReposDir = %q, want %q", res.ReposDir, reposDir)
+	}
+	if len(res.Repos) != 1 || res.Repos[0].Name != "repo-a" {
+		t.Fatalf("repos = %+v", res.Repos)
+	}
+}
+
 // 旧形式（v1）の状態ファイルは最初のサーバー操作で .bak へ退避され、その事実が
 // Result の LegacyBackup として返る（表示層が警告を描画する）。
 func TestLegacyStateBackupSurfacesInResult(t *testing.T) {

@@ -305,9 +305,11 @@ func (o appOps) Create(cfg *config.File, name string, repos []string) tea.Msg {
 	return opDoneMsg{summary: summary, err: err}
 }
 
-// Remove は worktree 削除を実行する。TUI からは常に非 --force で実行し、dirty で git が
-// 拒否した場合は CLI の強制削除へ誘導する（LLM も TUI も dirty の強制削除は明示コマンド
-// 経由に限る）。
+// Remove は worktree 削除を実行する。TUI からは常に非 --force で実行し、失敗した
+// 場合の案内は「変更が残っていて削除できない場合」に限って強制削除を提示する（dirty
+// の強制削除は LLM も TUI も明示コマンド経由に限る）。失敗原因はサーバー停止失敗や
+// ロック競合などさまざまで、それらに対しては破壊的な --force を勧めないため、条件付き
+// の文言にとどめる（原因別の分岐は行わない）。
 func (o appOps) Remove(cfg *config.File, name string) tea.Msg {
 	parsed, err := action.ParseName(name)
 	if err != nil {
@@ -316,7 +318,7 @@ func (o appOps) Remove(cfg *config.File, name string) tea.Msg {
 	_, err = buildApp(cfg, o.root, o.fw).Remove(o.ctx, action.Remove{Name: parsed, Force: false, KeepBranch: false})
 	if err != nil {
 		return opDoneMsg{
-			summary: fmt.Sprintf("remove %s: 失敗（強制削除は CLI: wt remove --force %s）", name, name),
+			summary: fmt.Sprintf("remove %s: 失敗（変更が残っていて削除できない場合は CLI: wt remove --force %s）", name, name),
 			err:     err,
 		}
 	}
