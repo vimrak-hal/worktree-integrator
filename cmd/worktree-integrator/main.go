@@ -103,12 +103,18 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	a := app.New(file, root, childio.Inherit(),
+	opts := []app.Option{
 		// 非 TTY（パイプ・CI）では nil になり、対話選択を要する create は
 		// 「--repo か --all を指定してください」エラーになる。
 		app.WithSelector(cli.InteractiveSelector()),
-		app.WithProgress(render.NewProgress(stdout)),
-	)
+	}
+	// --json 指定時は進捗描画を結線しない。進捗テキスト（「  [repo] fetch中」等）や
+	// ServerEvent が stdout を汚すと最終 JSON が機械可読でなくなるためで、これにより
+	// --json の stdout は最終 JSON のみになる。それ以外はライブの途中経過を stdout へ描く。
+	if !cli.JSONRequested(inv) {
+		opts = append(opts, app.WithProgress(render.NewProgress(stdout)))
+	}
+	a := app.New(file, root, childio.Inherit(), opts...)
 
 	if err := clirun.Run(ctx, inv, a, stdout); err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)

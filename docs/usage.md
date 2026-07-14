@@ -4,7 +4,7 @@
 wt <name>                # ≡ wt create <name>
 wt create <name> [--repo <repo>]... [--all] [--base <ref>] [-j N] [--json]
 wt list   [--json]
-wt enter  <name>
+wt enter  <name> [--json]
 wt remove <name> [--force] [--keep-branch] [--json]
 wt repos [--json]
 wt server switch <name> [--repo <repo>]... [--require-worktree] [--restart] [--json]
@@ -18,8 +18,9 @@ wt ui                    # 引数なしの `wt` でも開く
 wt mcp
 ```
 
-`--json` は構造化された結果を返すすべてのコマンド（`create` / `list` / `remove` /
-`repos` / `doctor` / `server switch|status|stop|logs` / `alias list`）で使えます。人間
+`--json` は構造化された結果を返すすべてのコマンド（`create` / `list` / `enter` /
+`remove` / `repos` / `doctor` / `server switch|status|stop|logs` / `alias list`）で
+使えます。人間
 向けのテキストの代わりに、MCP の `structuredContent` と同じ形の JSON を標準出力へ
 書き出します。`alias set` / `alias remove` はスカラー結果のため対象外です。`server
 logs` の `--json`（1 回きりの機械可読出力）は `-f`（追従ストリーム）と併用できません。
@@ -110,7 +111,7 @@ fix-crash  -                   api         -
 ## `enter` — 既存 worktree への遷移
 
 ```sh
-wt enter <name>
+wt enter <name> [--json]
 ```
 
 `<name>` の worktree ルートが存在することを確認し、**`after` フックだけ**を実行します。

@@ -338,7 +338,7 @@ func TestParsesStatusJson(t *testing.T) {
 }
 
 // --json は型付き Result を返す全コマンドで解析され、対応する Json フィールドに乗る
-// （既存の list / doctor / status に加え、create / remove / repos / alias list /
+// （既存の list / doctor / status に加え、create / enter / remove / repos / alias list /
 // server switch / stop / logs へ開放した）。未指定は各コマンドで false のまま。
 func TestJsonFlagAcrossResultCommands(t *testing.T) {
 	if !createOf(t, parse(t, "create", "feat", "--json")).Json {
@@ -346,6 +346,12 @@ func TestJsonFlagAcrossResultCommands(t *testing.T) {
 	}
 	if createOf(t, parse(t, "feat")).Json {
 		t.Fatal("create without --json must not set Json")
+	}
+	if !parse(t, "enter", "feat-x", "--json").(Enter).Json {
+		t.Fatal("enter --json should set Json")
+	}
+	if parse(t, "enter", "feat-x").(Enter).Json {
+		t.Fatal("enter without --json must not set Json")
 	}
 	if !parse(t, "remove", "feat-x", "--json").(Remove).Json {
 		t.Fatal("remove --json should set Json")
@@ -370,6 +376,41 @@ func TestJsonFlagAcrossResultCommands(t *testing.T) {
 	}
 	if !serverOf(t, parse(t, "server", "logs", "--json")).Json {
 		t.Fatal("server logs --json should set Json")
+	}
+}
+
+// JSONRequested は Json フィールドを持つ全バリアントでその値を返し、持たない実行
+// モード（RunMCP / RunUI / ConfigCheck / HelpShown）では常に false を返す。main は
+// これで進捗描画の結線可否を分岐する（--json の stdout を最終 JSON のみに保つ）。
+func TestJSONRequested(t *testing.T) {
+	// Json フィールドを持つバリアントは、その値をそのまま返す。
+	bearing := []struct {
+		name    string
+		enabled Invocation
+		off     Invocation
+	}{
+		{"create", Create{Json: true}, Create{}},
+		{"list", List{Json: true}, List{}},
+		{"enter", Enter{Json: true}, Enter{}},
+		{"remove", Remove{Json: true}, Remove{}},
+		{"doctor", Doctor{Json: true}, Doctor{}},
+		{"repos", Repos{Json: true}, Repos{}},
+		{"server", Server{Json: true}, Server{}},
+		{"alias", Alias{Json: true}, Alias{}},
+	}
+	for _, tt := range bearing {
+		if !JSONRequested(tt.enabled) {
+			t.Errorf("%s{Json:true} should request JSON", tt.name)
+		}
+		if JSONRequested(tt.off) {
+			t.Errorf("%s{} should not request JSON", tt.name)
+		}
+	}
+	// Json フィールドを持たない実行モードは常に false。
+	for _, inv := range []Invocation{RunMCP{}, RunUI{}, ConfigCheck{}, HelpShown{}} {
+		if JSONRequested(inv) {
+			t.Errorf("%T should not request JSON", inv)
+		}
 	}
 }
 

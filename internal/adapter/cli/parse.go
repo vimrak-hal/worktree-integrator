@@ -1,10 +1,11 @@
 // Package cli はコマンドラインを Invocation（封印された sum-type）へと解析する。
 //
-// Parse は I/O を一切行わない純関数である。設定ファイルの読み込み（config.Load）と
-// 環境変数の参照（os.Getenv）は main に集約され、解決済みアクションへの変換
-// （優先順位「フラグ > 環境変数 > 設定ファイル > 既定値」の適用）は package action の
-// コンストラクタが担う。cobra が生成するヘルプ／バージョンのテキストもプロセスの
-// stdout へ直接書かず、HelpShown バリアントとして呼び出し元（main）に返す。
+// Parse は I/O を一切行わない純関数である。設定ファイルの読み込み（config.Load）は
+// main が起動時に 1 回だけ行い、環境変数の参照（os.Getenv）は各アダプタ
+// （adapter/clirun・adapter/tui・adapter/mcpserver）が担って action のコンストラクタへ
+// getenv として注入する（優先順位「フラグ > 環境変数 > 設定ファイル > 既定値」による
+// 解決は package action が行う）。cobra が生成するヘルプ／バージョンのテキストも
+// プロセスの stdout へ直接書かず、HelpShown バリアントとして呼び出し元（main）に返す。
 package cli
 
 import (
@@ -55,6 +56,9 @@ type List struct {
 // 時点で検証済みである。
 type Enter struct {
 	Name action.Name
+	// Json は Result を JSON で出力する（表示形式の選択であり、action の語彙には
+	// 含めない）。
+	Json bool
 }
 
 // Remove は worktree 削除の起動要求。Force は CLI 専用の安全弁の解除であり、MCP の
@@ -135,6 +139,37 @@ func (RunMCP) isInvocation()      {}
 func (RunUI) isInvocation()       {}
 func (ConfigCheck) isInvocation() {}
 func (HelpShown) isInvocation()   {}
+
+// JSONRequested は inv が機械可読な JSON 出力（--json）を要求しているかを返す。Json
+// フィールドを持つバリアントはその値を、持たないバリアント（RunMCP / RunUI /
+// ConfigCheck / HelpShown）は false を返す。main はこれが true のとき進捗描画
+// （WithProgress）を結線せず、--json の stdout を最終 JSON のみに保つ（進捗テキストや
+// ServerEvent で機械可読性を損なわせない）。封印された Invocation の全バリアントを
+// 網羅し、未知の値はバグとしてパニックさせる（Run の dispatch と同じ流儀）。
+func JSONRequested(inv Invocation) bool {
+	switch v := inv.(type) {
+	case Create:
+		return v.Json
+	case List:
+		return v.Json
+	case Enter:
+		return v.Json
+	case Remove:
+		return v.Json
+	case Doctor:
+		return v.Json
+	case Repos:
+		return v.Json
+	case Server:
+		return v.Json
+	case Alias:
+		return v.Json
+	case RunMCP, RunUI, ConfigCheck, HelpShown:
+		return false
+	default:
+		panic(fmt.Sprintf("unknown cli.Invocation %T", inv))
+	}
+}
 
 // Parse は args（プログラム名を除く）を Invocation へと解析する。サブコマンドのない
 // 素の `worktree-integrator <name>` の形式は `create <name>` として扱われる。素の名前が
@@ -266,15 +301,17 @@ func addTree(root *cobra.Command, result *Invocation) {
 		Use:   "enter <name>",
 		Short: "Run the `after` hooks for an existing worktree (e.g. to navigate into it)",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(c *cobra.Command, args []string) error {
 			name, err := action.ParseName(args[0])
 			if err != nil {
 				return err
 			}
-			*result = Enter{Name: name}
+			json, _ := c.Flags().GetBool("json")
+			*result = Enter{Name: name, Json: json}
 			return nil
 		},
 	}
+	enterCmd.Flags().Bool("json", false, "Print the result as JSON")
 
 	removeCmd := &cobra.Command{
 		Use:   "remove <name>",

@@ -14,6 +14,7 @@ import (
 	"github.com/vimrak-hal/worktree-integrator/internal/core/config"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/childio"
 	"github.com/vimrak-hal/worktree-integrator/internal/infra/statedir"
+	"github.com/vimrak-hal/worktree-integrator/internal/infra/testutil"
 )
 
 // このファイルは、各コマンドの dispatch と render の疎通確認（旧 main_test.go の
@@ -35,8 +36,10 @@ func isolate(t *testing.T) {
 
 // newApp は隔離済み環境から CLI 用の App を構築する（main の run と同じ組み立て。
 // テストの stdio は非 TTY のため Selector は nil のままで、対話選択を要する create は
-// 「--repo か --all を指定してください」エラーになる）。
-func newApp(t *testing.T, stdout io.Writer) *app.App {
+// 「--repo か --all を指定してください」エラーになる）。progress は main と同じ流儀で、
+// JSON 出力を要求しない起動のときだけ結線する（--json 経路は進捗テキストで stdout を
+// 汚さない）。
+func newApp(t *testing.T, stdout io.Writer, progress bool) *app.App {
 	t.Helper()
 	file, err := config.Load()
 	if err != nil {
@@ -46,17 +49,22 @@ func newApp(t *testing.T, stdout io.Writer) *app.App {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return app.New(file, root, childio.Inherit(), app.WithProgress(render.NewProgress(stdout)))
+	var opts []app.Option
+	if progress {
+		opts = append(opts, app.WithProgress(render.NewProgress(stdout)))
+	}
+	return app.New(file, root, childio.Inherit(), opts...)
 }
 
 // runArgs は args を cli.Parse で Invocation へ解決し、隔離済み App で Run へ通す。
+// 進捗描画の結線可否は main と同じく cli.JSONRequested で分岐する。
 func runArgs(t *testing.T, ctx context.Context, args []string, stdout io.Writer) error {
 	t.Helper()
 	inv, err := cli.Parse(args)
 	if err != nil {
 		t.Fatalf("parse %v: %v", args, err)
 	}
-	return Run(ctx, inv, newApp(t, stdout), stdout)
+	return Run(ctx, inv, newApp(t, stdout, !cli.JSONRequested(inv)), stdout)
 }
 
 // tree 系コマンド（list / doctor / repos / enter / remove）の dispatch の疎通確認。
@@ -211,6 +219,40 @@ func TestRunJsonAcrossResultCommands(t *testing.T) {
 			t.Fatalf("decoded = %+v", decoded)
 		}
 	})
+}
+
+// create --json は進捗描画を結線しない（runArgs が main と同じく JSONRequested で
+// 分岐する）ため、実リポジトリを fetch しても stdout は進捗テキストで汚れず、最終 JSON
+// のみになる。進捗を出す実体（repo-a）を用意し、--json の出力が JSON としてパースでき、
+// かつ「fetch中 / 作成中」等の進捗行を一切含まないことを固定する（進捗が漏れると
+// `| jq` が壊れる回帰の防止）。
+func TestRunCreateJsonOmitsProgress(t *testing.T) {
+	isolate(t)
+	reposDir := t.TempDir()
+	testutil.CloneWithBranchNamed(t, reposDir, "main", "repo-a")
+	t.Setenv("WT_REPOS_DIR", reposDir)
+	t.Setenv("WT_WORKTREES_DIR", t.TempDir())
+
+	var stdout bytes.Buffer
+	if err := runArgs(t, t.Context(), []string{"create", "feat-x", "--repo", "repo-a", "--json"}, &stdout); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	var decoded struct {
+		Worktree    string `json:"worktree"`
+		Disposition string `json:"disposition"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if decoded.Worktree != "feat-x" || decoded.Disposition == "" {
+		t.Fatalf("decoded = %+v", decoded)
+	}
+	// 進捗テキスト（render.NewProgress の「  [repo] fetch中 / 作成中」）が混ざらない。
+	for _, marker := range []string{"fetch中", "作成中", "  [repo-a]"} {
+		if strings.Contains(stdout.String(), marker) {
+			t.Fatalf("--json の stdout に進捗行 %q が混ざっている: %q", marker, stdout.String())
+		}
+	}
 }
 
 // 非 TTY（テストのバッファ stdio）での素の create は、--repo / --all の指定を促す

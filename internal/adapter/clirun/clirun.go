@@ -53,7 +53,7 @@ func Run(ctx context.Context, inv cli.Invocation, a *app.App, stdout io.Writer) 
 
 	case cli.Enter:
 		res, err := a.Enter(ctx, v.Name)
-		return render.Emit(stdout, res, err, render.Enter)
+		return emit(stdout, v.Json, res, err, render.Enter)
 
 	case cli.Remove:
 		res, err := a.Remove(ctx, action.Remove{Name: v.Name, Force: v.Force, KeepBranch: v.KeepBranch})
@@ -92,8 +92,8 @@ func Run(ctx context.Context, inv cli.Invocation, a *app.App, stdout io.Writer) 
 // なら render.Emit（テキスト経路）へ委譲し、true なら res があるとき JSON 化する。
 // エンコード失敗はそれを優先して返し、そうでなければワークフローの err を返す —
 // テキスト経路の Emit と同じ「res があれば描画してから err」規約に揃える。--json を
-// 受け付ける全 case（list / doctor / repos / create / remove / server *）の分岐を
-// この 1 箇所へ集約する。
+// 受け付ける全 case（list / enter / doctor / repos / create / remove / server *）の
+// 分岐をこの 1 箇所へ集約する。
 func emit[R any](w io.Writer, json bool, res *R, err error, draw func(io.Writer, *R)) error {
 	if !json {
 		return render.Emit(w, res, err, draw)
