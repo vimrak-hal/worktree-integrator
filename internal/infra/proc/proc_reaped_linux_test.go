@@ -49,10 +49,13 @@ func TestGroupReapedTrueForZombie(t *testing.T) {
 	}
 }
 
-// TestGroupReapedTrueForMissingGroup は、メンバーが 1 つも存在しない pgid に対して
-// GroupReaped が true（全消滅）を返すことを確認する。
-func TestGroupReapedTrueForMissingGroup(t *testing.T) {
-	if !proc.GroupReaped(1 << 30) {
-		t.Fatal("a group with no members should be reported as reaped")
+// TestGroupReapedFalseWhenNoMemberObserved は、メンバーを 1 つも観測できない pgid に
+// 対して GroupReaped が false（消滅と断定しない）を返すことを確認する。GroupReaped は
+// kill(-pgid, 0) がグループの存在を示した文脈でのみ呼ばれるため、観測ゼロは「全滅」では
+// なく「hidepid 等で観測不能」と解釈するのが保守的で安全である（真の全滅なら kill が
+// ESRCH を返し、この関数は呼ばれない）。
+func TestGroupReapedFalseWhenNoMemberObserved(t *testing.T) {
+	if proc.GroupReaped(1 << 30) {
+		t.Fatal("a group with no observable members must not be reported as reaped")
 	}
 }

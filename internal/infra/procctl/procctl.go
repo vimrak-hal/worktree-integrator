@@ -136,10 +136,19 @@ func (u *UnixProcess) Alive(id proc.Ident) bool {
 	if !groupAlive(id.Pgid) {
 		return false
 	}
-	// kill(-pgid, 0) が生存を示しても、メンバーがすべてゾンビ（SIGKILL 済みだが
-	// 未回収）なら実行は終わっている。PID 1 が最小 init のコンテナ環境では孤児が
-	// 回収されず、この判定が無いとグループは永遠に生存扱いになる（誤殺は Ident の
-	// 同一性照合で防がれるため、消滅扱いにしてもリスクは増えない）。
+	// 定数コストの高速パス: リーダー PID の /proc/<pid>/stat を 1 回だけ読み、リーダーが
+	// 生きていて（状態が Z でなく）同一性（開始時刻）も一致すれば、/proc 全走査を省いて
+	// 生存とみなす。StopGroup の 50ms ポーリングや status/list の状態ロック下での呼び出しが、
+	// プロセス数の多いホストで O(全プロセス数) を繰り返すのを避ける。darwin では
+	// LeaderAlive が常に false のため、この分岐は素通りして従来の判定へ落ちる。
+	if proc.LeaderAlive(id) {
+		return true
+	}
+	// リーダーが Z・消滅・同一性不一致のときだけ全走査へフォールバックする。
+	// kill(-pgid, 0) が生存を示しても、メンバーがすべてゾンビ（SIGKILL 済みだが未回収）
+	// なら実行は終わっている。PID 1 が最小 init のコンテナ環境では孤児が回収されず、
+	// この判定が無いとグループは永遠に生存扱いになる（誤殺は Ident の同一性照合で
+	// 防がれるため、消滅扱いにしてもリスクは増えない）。
 	if proc.GroupReaped(id.Pgid) {
 		return false
 	}

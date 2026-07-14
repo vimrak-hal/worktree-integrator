@@ -8,3 +8,10 @@ package proc
 func GroupReaped(pgid int) bool {
 	return false
 }
+
+// LeaderAlive は darwin では常に false を返す。/proc を前提とする定数コストの高速パスが
+// 無いため、Alive の判定は従来どおり StartTime による同一性照合（slow path）に委ねる。
+// darwin では GroupReaped も常に false のため、全体として従来挙動と一致する。
+func LeaderAlive(id Ident) bool {
+	return false
+}
