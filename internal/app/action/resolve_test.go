@@ -153,37 +153,43 @@ func TestNewCreateValidatesRepoSelection(t *testing.T) {
 	}
 }
 
-// validateBase は git fetch の位置引数（ブランチ名）へ渡る base 指定を検証する。
-// リテラル "auto" と通常のブランチ名は許可し、先頭 '-' のオプション化・パス
-// トラバーサル・空文字は拒否する。
+// validateBase は git fetch の位置引数（ブランチ名）へ渡る base 指定を、インジェクション
+// 防御に必要な最小限でのみ検証する。"auto"・通常のブランチ名・git として合法な '@'/'+' 入り
+// の名前は許可し、セグメント先頭 '-' のオプション化・制御文字・空白・空セグメント・空文字は
+// 拒否する。文字種は絞らない（不正な ref は git 自身がエラーにするため）。
 func TestValidateBase(t *testing.T) {
-	for _, b := range []string{"auto", "main", "feature/x"} {
+	for _, b := range []string{"auto", "main", "feature/x", "renovate/@types-node", "feat+x"} {
 		if err := validateBase(b); err != nil {
 			t.Errorf("validateBase(%q) = %v, want nil", b, err)
 		}
 	}
-	for _, b := range []string{"--upload-pack=/bin/true", "-x", "", "feature/-x", "../escape"} {
+	for _, b := range []string{"--upload-pack=/bin/true", "-x", "", "feature/-x", "a\nb", "a//b"} {
 		if err := validateBase(b); err == nil {
 			t.Errorf("validateBase(%q) = nil, want error", b)
 		}
 	}
 }
 
-// validateRemote は git fetch の位置引数（リモート名）へ渡る remote 指定を、単一
-// セグメントとして検証する。"origin" は許可し、先頭 '-'・"/"・空文字は拒否する。
+// validateRemote は git fetch の位置引数（リモート名）へ渡る remote 指定を、インジェクション
+// 防御に必要な最小限でのみ検証する。"origin" や URL 形式（"/"・":" を含む）は許可し、先頭
+// '-'・制御文字・空白・空文字は拒否する。
 func TestValidateRemote(t *testing.T) {
-	if err := validateRemote("origin"); err != nil {
-		t.Errorf("validateRemote(origin) = %v, want nil", err)
+	for _, r := range []string{"origin", "https://example.com/repo.git", "user@host:path"} {
+		if err := validateRemote(r); err != nil {
+			t.Errorf("validateRemote(%q) = %v, want nil", r, err)
+		}
 	}
-	for _, r := range []string{"-origin", "", "a/b", "--upload-pack=x"} {
+	for _, r := range []string{"-origin", "", "--upload-pack=x", "a b"} {
 		if err := validateRemote(r); err == nil {
 			t.Errorf("validateRemote(%q) = nil, want error", r)
 		}
 	}
 }
 
-// NewCreate は base・remote の参照しうる全ソース（--base フラグ・remote・
-// [defaults].base・[repos.<name>].base）を検証し、違反時はエラーを返す。
+// NewCreate は今回の呼び出しで解決される「デフォルト base」（--base フラグ・[defaults].base）
+// と remote を検証し、違反時はエラーを返す。一方 [repos.<name>].base は今回選択していない
+// リポジトリの分まで一律検証すると設定の 1 エントリで全 create が壊れるため、NewCreate では
+// 検証せず素通しする（検証は参照時点の Create.BaseFor が担う）。
 func TestNewCreateValidatesBaseAndRemote(t *testing.T) {
 	// 不正な --base フラグ。
 	if _, err := NewCreate(CreateInput{Name: "feat", Base: "--upload-pack=/bin/true", File: &config.File{}, Getenv: noEnv, Home: testHome}); err == nil {
@@ -193,15 +199,23 @@ func TestNewCreateValidatesBaseAndRemote(t *testing.T) {
 	if _, err := NewCreate(CreateInput{Name: "feat", Overrides: Overrides{Remote: "-origin"}, File: &config.File{}, Getenv: noEnv, Home: testHome}); err == nil {
 		t.Error("不正な remote はエラーになるべき")
 	}
-	// 不正な [repos.<name>].base。
-	badRepo := &config.File{Repos: map[string]config.RepoConfig{"api": {Base: "-x"}}}
-	if _, err := NewCreate(CreateInput{Name: "feat", File: badRepo, Getenv: noEnv, Home: testHome}); err == nil {
-		t.Error("不正な [repos.api].base はエラーになるべき")
-	}
 	// 不正な [defaults].base。
 	badDefaults := &config.File{Defaults: config.Defaults{Base: "--exec=x"}}
 	if _, err := NewCreate(CreateInput{Name: "feat", File: badDefaults, Getenv: noEnv, Home: testHome}); err == nil {
 		t.Error("不正な [defaults].base はエラーになるべき")
+	}
+	// 不正な [repos.<name>].base は NewCreate では弾かれない（参照時点で検証）。BaseFor が
+	// そのリポジトリについてのみエラーを返し、他リポジトリは影響を受けない。
+	badRepo := &config.File{Repos: map[string]config.RepoConfig{"api": {Base: "-x"}}}
+	cfg, err := NewCreate(CreateInput{Name: "feat", File: badRepo, Getenv: noEnv, Home: testHome})
+	if err != nil {
+		t.Fatalf("不正な [repos.api].base があっても NewCreate は成功すべき: %v", err)
+	}
+	if _, err := cfg.BaseFor("api"); err == nil {
+		t.Error("BaseFor(api) は不正な base のためエラーになるべき")
+	}
+	if _, err := cfg.BaseFor("other"); err != nil {
+		t.Errorf("BaseFor(other) は影響を受けず成功すべき: %v", err)
 	}
 	// 正常系: auto / main / feature/x・origin はいずれも通る。
 	ok := &config.File{
@@ -228,11 +242,11 @@ func TestCreateBaseForResolutionOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.BaseFor("api"); got != "flag-base" {
-		t.Fatalf("BaseFor(api) = %q, want flag-base", got)
+	if got, err := cfg.BaseFor("api"); err != nil || got != "flag-base" {
+		t.Fatalf("BaseFor(api) = %q, %v, want flag-base", got, err)
 	}
-	if got := cfg.BaseFor("web"); got != "flag-base" {
-		t.Fatalf("BaseFor(web) = %q, want flag-base (applies to every repo)", got)
+	if got, err := cfg.BaseFor("web"); err != nil || got != "flag-base" {
+		t.Fatalf("BaseFor(web) = %q, %v, want flag-base (applies to every repo)", got, err)
 	}
 
 	// フラグ無指定なら repos.<repo>.base。
@@ -240,12 +254,12 @@ func TestCreateBaseForResolutionOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.BaseFor("api"); got != "release" {
-		t.Fatalf("BaseFor(api) = %q, want release", got)
+	if got, err := cfg.BaseFor("api"); err != nil || got != "release" {
+		t.Fatalf("BaseFor(api) = %q, %v, want release", got, err)
 	}
 	// repos.<repo>.base の無いリポジトリは defaults.base。
-	if got := cfg.BaseFor("web"); got != "develop" {
-		t.Fatalf("BaseFor(web) = %q, want develop", got)
+	if got, err := cfg.BaseFor("web"); err != nil || got != "develop" {
+		t.Fatalf("BaseFor(web) = %q, %v, want develop", got, err)
 	}
 
 	// defaults.base も無ければ "auto"。
@@ -253,8 +267,8 @@ func TestCreateBaseForResolutionOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.BaseFor("anything"); got != "auto" {
-		t.Fatalf("BaseFor(anything) = %q, want auto", got)
+	if got, err := cfg.BaseFor("anything"); err != nil || got != "auto" {
+		t.Fatalf("BaseFor(anything) = %q, %v, want auto", got, err)
 	}
 }
 

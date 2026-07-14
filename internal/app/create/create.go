@@ -148,7 +148,10 @@ func Run(ctx context.Context, deps Deps, cfg action.Create) (*Result, error) {
 		return res, fmt.Errorf("worktree ルート %s を作成できません: %w", runCtx.Root, err)
 	}
 
-	reqs := buildRequests(cfg, runCtx.Root, selected)
+	// base の解決に失敗したリポジトリは reqs から外れ baseFailures に載る。他リポジトリの
+	// 作成はそのまま続行し、失敗はそのリポジトリ単位に留める（設定の 1 エントリで全体を
+	// 壊さない）。
+	reqs, baseFailures := buildRequests(cfg, runCtx.Root, selected)
 	concurrency := worktree.Concurrency(cfg.Concurrency, len(reqs))
 	outcomes := worktree.Run(ctx, reqs, concurrency, reporter)
 
@@ -167,6 +170,9 @@ func Run(ctx context.Context, deps Deps, cfg action.Create) (*Result, error) {
 		req := reqs[i]
 		copies[o.Repo] = copyExtras(ctx, req.RepoPath, req.Target, o.Repo, cfg.CopyPlanFor(o.Repo), reporter)
 	}
+	// base 解決に失敗したリポジトリの失敗を集約へ合流させる。コピーループ（reqs との
+	// インデックス整合に依存する）を抜けた後に追加することで整合を崩さない。
+	outcomes = append(outcomes, baseFailures...)
 	res.Repos = repoOutcomes(outcomes, copies)
 	for _, r := range res.Repos {
 		switch r.Status {

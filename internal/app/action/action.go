@@ -76,8 +76,22 @@ type Create struct {
 // BaseFor は repo のベースブランチ解決を行う: --base フラグ / MCP の base パラメータ
 // （Create.Base）> [repos.<repo>].base > [defaults].base > "auto"。"auto" は
 // internal/core/git.DefaultBranch による自動解決（symbolic-ref → main → master）を
-// 意味する。
-func (c Create) BaseFor(repo string) string {
+// 意味する。解決した値は返す直前に validateBase で検証する。--base / [defaults].base は
+// NewCreate が既に検証済みだが、[repos.<repo>].base はこの参照時点が初めての検証機会で
+// あり（今回選択していないリポジトリの分まで NewCreate で一律検証すると、設定の 1 エントリ
+// で全 create が壊れるため意図的に遅延させている）、不正なら error を返す。呼び出し側
+// （app/create）はこれを「そのリポジトリの失敗」として集約し、他リポジトリの作成は続行する。
+func (c Create) BaseFor(repo string) (string, error) {
+	base := c.baseSource(repo)
+	if err := validateBase(base); err != nil {
+		return "", err
+	}
+	return base, nil
+}
+
+// baseSource は検証前のベースブランチ指定を優先順位に従って選ぶ（解決は BaseFor が担い、
+// ここは値の選択のみ）。
+func (c Create) baseSource(repo string) string {
 	if c.Base != "" {
 		return c.Base
 	}

@@ -150,9 +150,12 @@ func NewCreate(in CreateInput) (Create, error) {
 	}
 	// base・remote は解決後に git fetch の位置引数（ブランチ名・リモート名）としてそのまま
 	// 渡るため、"--upload-pack=<cmd>" 等でのオプション混同・任意コマンド実行を型の手前で
-	// 塞ぐ。検証の入口はこのコンストラクタに一元化し、CLI も MCP も必ずここを通す。
-	// 空の base は「未指定」（BaseFor がリポジトリごとに解決する）を意味するため素通しし、
-	// 参照しうる全ソース（フラグ / [defaults].base / [repos.<name>].base）を検証する。
+	// 塞ぐ。ここで検証するのは「今回の呼び出しで明示・解決されたデフォルト base」だけに
+	// 限る: --base フラグと [defaults].base は今回すべてのリポジトリに効く値なので、不正
+	// なら即エラーにする。リポジトリ個別の [repos.<name>].base は、今回の create で選択して
+	// いないリポジトリの分まで一律に検証すると設定の 1 エントリで全 create が壊れるため、
+	// ここでは検証せず、実際に参照される時点（Create.BaseFor）で検証してそのリポジトリ
+	// 単位の失敗に留める。空の base は「未指定」（BaseFor が解決する）を意味するため素通しする。
 	if in.Base != "" {
 		if err := validateBase(in.Base); err != nil {
 			return Create{}, err
@@ -161,13 +164,6 @@ func NewCreate(in CreateInput) (Create, error) {
 	if in.File.Defaults.Base != "" {
 		if err := validateBase(in.File.Defaults.Base); err != nil {
 			return Create{}, fmt.Errorf("[defaults].base: %w", err)
-		}
-	}
-	for repoName, rc := range in.File.Repos {
-		if rc.Base != "" {
-			if err := validateBase(rc.Base); err != nil {
-				return Create{}, fmt.Errorf("[repos.%s].base: %w", repoName, err)
-			}
 		}
 	}
 	resolvedRemote := remote(in.Overrides.Remote, in.File, in.Getenv)

@@ -280,6 +280,67 @@ func TestBaseOverrideCreatesFromExplicitBranch(t *testing.T) {
 	}
 }
 
+// 今回選択していないリポジトリの [repos.X].base が不正でも、create は成功する。旧実装は
+// NewCreate が全 [repos.*].base を一律検証し、設定に 1 つ不正な base があるだけで全 create
+// が壊れていた（main からの回帰）。その回帰の固定。
+func TestUnselectedRepoWithInvalidBaseDoesNotBreakCreate(t *testing.T) {
+	repos := t.TempDir()
+	worktrees := t.TempDir()
+	testutil.CloneWithBranchNamed(t, repos, "main", "repo-a")
+	testutil.CloneWithBranchNamed(t, repos, "main", "repo-b")
+
+	cfg := cfgOf(t, "feat", repos, worktrees)
+	cfg.Repos = []string{"repo-a"}
+	// repo-b は今回選択しない。その base が不正でも参照されないため repo-a の作成は成功する。
+	cfg.RepoConfigs = map[string]config.RepoConfig{"repo-b": {Base: "--upload-pack=/bin/true"}}
+
+	res, err := Run(t.Context(), deps(t, nil), cfg)
+	if err != nil {
+		t.Fatalf("err = %v\nres = %+v", err, res)
+	}
+	if res.Created != 1 || res.Failed != 0 {
+		t.Fatalf("res = %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(worktrees, "feat", "repo-a", ".git")); err != nil {
+		t.Fatal("repo-a worktree should have been created")
+	}
+}
+
+// 選択したリポジトリの base が不正な場合、そのリポジトリだけが失敗し、他は成功する。base
+// 検証は BaseFor がリポジトリ単位で行い、失敗はそのリポジトリの Outcome に留まる（設定の
+// 1 エントリが全体を壊さない）。
+func TestSelectedRepoWithInvalidBaseFailsOnlyThatRepo(t *testing.T) {
+	repos := t.TempDir()
+	worktrees := t.TempDir()
+	testutil.CloneWithBranchNamed(t, repos, "main", "repo-a")
+	testutil.CloneWithBranchNamed(t, repos, "main", "repo-b")
+
+	cfg := cfgOf(t, "feat", repos, worktrees)
+	cfg.All = true
+	cfg.RepoConfigs = map[string]config.RepoConfig{"repo-a": {Base: "--upload-pack=/bin/true"}}
+
+	res, err := Run(t.Context(), deps(t, nil), cfg)
+	if err == nil {
+		t.Fatal("不正な base のリポジトリがあるため error が返るべき")
+	}
+	if res.Created != 1 || res.Failed != 1 {
+		t.Fatalf("res = %+v", res)
+	}
+	byRepo := map[string]string{}
+	for _, ro := range res.Repos {
+		byRepo[ro.Repo] = ro.Status
+	}
+	if byRepo["repo-a"] != RepoFailed {
+		t.Fatalf("repo-a status = %q, want failed", byRepo["repo-a"])
+	}
+	if byRepo["repo-b"] != RepoCreated {
+		t.Fatalf("repo-b status = %q, want created", byRepo["repo-b"])
+	}
+	if _, err := os.Stat(filepath.Join(worktrees, "feat", "repo-b", ".git")); err != nil {
+		t.Fatal("repo-b worktree should have been created")
+	}
+}
+
 // 非 TTY（Selector が nil）で --repo / --all も未指定なら、フックや探索に触れる前に
 // 使い方エラーになる。
 func TestInteractiveModeWithoutSelectorIsError(t *testing.T) {

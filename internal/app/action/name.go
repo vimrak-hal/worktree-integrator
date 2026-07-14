@@ -3,6 +3,7 @@ package action
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/vimrak-hal/worktree-integrator/internal/core/config"
 )
@@ -50,12 +51,17 @@ func validateRepoName(name string) error {
 	return validateSegment("リポジトリ名", name, name)
 }
 
-// validateBase は base ブランチ指定が安全かを検証する。リテラル "auto"
-// （config.DefaultBase。リモートの symbolic-ref → main → master で自動解決する
-// センチネル）は常に許可し、それ以外は worktree 名と同じセグメント規則を "/" 区切りの
-// 各セグメントに適用する。base は最終的に git fetch の位置引数（ブランチ名）として
-// リモートへ渡るため、先頭 '-' のオプション化や制御文字の混入を型の手前で塞ぐ。空文字は
-// 拒否する（呼び出し側は「未指定」を空文字で表すため、検証にかける前に自分で除外する）。
+// validateBase は base ブランチ指定を「インジェクション防御に必要な最小限」でのみ検証
+// する。base は最終的に git fetch の位置引数（ブランチ名）としてリモートへ渡るため、ここ
+// での役目は先頭 '-' のオプション化（"--upload-pack=<cmd>" 等）と制御文字・空白の注入を
+// 型の手前で塞ぐことに限る。文字種の許可リストは敷かない: '@'・'+'・'#'・':' などは git
+// として合法なブランチ名（renovate が生成する "renovate/@types-node" 等）に現れ、不正な
+// ref は git 自身が自然にエラーにするため、ここで文字種を絞ると main で通っていた正当な
+// 名前まで巻き込んで回帰する。base は "/" でセグメントに分割し、各セグメントの先頭 '-'・
+// 制御文字・空白と、空セグメント（"a//b" や先頭・末尾の "/"）を拒否する。リテラル "auto"
+// （config.DefaultBase。リモートの symbolic-ref → main → master で自動解決するセンチネル）
+// は常に許可する。空文字は拒否する（呼び出し側は「未指定」を空文字で表すため、検証にかける
+// 前に自分で除外する）。
 func validateBase(base string) error {
 	if base == config.DefaultBase {
 		return nil
@@ -64,25 +70,44 @@ func validateBase(base string) error {
 		return fmt.Errorf("base が空です")
 	}
 	for seg := range strings.SplitSeq(base, "/") {
-		if err := validateSegment("base", base, seg); err != nil {
+		if seg == "" {
+			return fmt.Errorf("base %q が不正です: 空のセグメント（先頭・末尾・連続した \"/\"）は使えません", base)
+		}
+		if err := validateRefArg("base", base, seg); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// validateRemote は remote 名が安全かを検証する。remote は git fetch の位置引数として
-// そのまま渡るため、単一セグメントとして worktree 名と同じ規則を適用し、"/" を含む名前と
-// 空文字を拒否する。先頭 '-' の混入は "--upload-pack=<cmd>" のような任意コマンド実行への
-// 入り口になりうるため、ここで塞ぐ。
+// validateRemote は remote 指定を「インジェクション防御に必要な最小限」でのみ検証する。
+// remote は git fetch の位置引数としてそのまま渡るため、先頭 '-' のオプション化・制御文字・
+// 空白の混入を塞ぐことだけが役目である。"/" や ":" は URL 形式のリモート指定
+// （"https://example.com/repo.git" や "user@host:path"）で git として合法なため許可する
+// （文字種は絞らない — 単一トークンとして扱い、"/" でのセグメント分割はしない）。空文字は
+// 拒否する。
 func validateRemote(remote string) error {
 	if remote == "" {
 		return fmt.Errorf("remote が空です")
 	}
-	if strings.ContainsRune(remote, '/') {
-		return fmt.Errorf("remote %q が不正です: \"/\" は使えません", remote)
+	return validateRefArg("remote", remote, remote)
+}
+
+// validateRefArg は git の位置引数（ブランチ名・リモート名）へ渡る 1 トークンを、
+// インジェクション防御に必要な最小限で検証する: 先頭 '-'（git のオプション化）と、制御
+// 文字（改行含む）・空白の混入を拒否する。文字種そのものは制限しない。呼び出し側は空文字
+// でないトークンを渡す（token[0] の参照が安全であることは呼び出し側が保証する）。what は
+// エラーメッセージの主語、whole は元の入力全体（提示用）、token は検証対象。
+func validateRefArg(what, whole, token string) error {
+	if token[0] == '-' {
+		return fmt.Errorf("%s %q が不正です: 先頭の '-' は git のオプション（例: --upload-pack=<cmd>）として解釈されるため使えません", what, whole)
 	}
-	return validateSegment("remote", remote, remote)
+	for _, c := range token {
+		if unicode.IsControl(c) || unicode.IsSpace(c) {
+			return fmt.Errorf("%s %q が不正です: 制御文字・空白文字は使えません", what, whole)
+		}
+	}
+	return nil
 }
 
 // validateSegment は 1 つのパスセグメントを検証し、違反時には「何が違反か」を具体的に
